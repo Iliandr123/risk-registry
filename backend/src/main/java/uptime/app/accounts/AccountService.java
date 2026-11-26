@@ -56,7 +56,12 @@ class AccountService implements AccountDirectory {
 
     @Override
     public Optional<Owner> findOwner(UUID id) {
-        return store.findOwner(id);
+        return store.findOwner(id, false);
+    }
+
+    @Override
+    public Optional<Owner> lockOwner(UUID id) {
+        return store.findOwner(id, true);
     }
 
     @Override

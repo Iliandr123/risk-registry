@@ -21,6 +21,7 @@ JUnit запускает HTTP-проверки через MockMvc. Testcontainer
 | `SPRING_DATASOURCE_URL` | JDBC-адрес, например `jdbc:postgresql://localhost:5432/risk_register` |
 | `SPRING_DATASOURCE_USERNAME` | Пользователь PostgreSQL с правами на миграции и операции приложения |
 | `SPRING_DATASOURCE_PASSWORD` | Пароль пользователя PostgreSQL |
+| `RISK_REGISTER_TEAM_TIME_ZONE` | Часовой пояс команды для даты оценки и срока пересмотра, например `Asia/Yekaterinburg`. По умолчанию `UTC` |
 
 На пустой базе выполните команду из приватного терминала. Она применит миграции, создаст первого администратора и один раз напечатает временный пароль для личной передачи.
 

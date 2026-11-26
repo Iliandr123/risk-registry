@@ -66,7 +66,7 @@ class AccountsIntegrationTest {
 
     @BeforeEach
     void emptyAccounts() {
-        jdbc.sql("TRUNCATE sessions, accounts").update();
+        jdbc.sql("TRUNCATE risk_events, risk_versions, risks, sessions, accounts").update();
         int scenario = SCENARIO.incrementAndGet();
         address = "127.0.0." + scenario;
         prefix = "scenario-" + scenario + "-";

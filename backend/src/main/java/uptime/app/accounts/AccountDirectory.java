@@ -8,8 +8,10 @@ public interface AccountDirectory {
 
     void requireSessionCsrf(String sessionToken, String csrfToken);
 
-    /** When called within a transaction, holds the owner's row until that transaction ends. */
     Optional<Owner> findOwner(UUID id);
+
+    /** Holds the owner's row until the calling transaction ends. */
+    Optional<Owner> lockOwner(UUID id);
 
     record Member(UUID id, boolean reviewer, boolean mustChangePassword) {}
 
