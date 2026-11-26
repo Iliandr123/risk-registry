@@ -1,22 +1,37 @@
 # Backend
 
-Пустой Java-проект (Java 25 LTS, Maven) без внешних зависимостей и предметной логики.
+API пилота на Java 25 LTS и Spring Boot. Spring JDBC работает с PostgreSQL, Liquibase применяет миграции при запуске.
 
-- `src/main/java/uptime/app/Main.java` — точка входа будущего сервиса; сейчас сразу завершается.
-- `src/main/resources/` — место для ресурсов и конфигурации.
-- `src/test/java/` — место для тестов.
+Выполняйте команды из каталога `backend/` с JDK 25. В Windows используйте `./gradlew.bat` вместо `sh ./gradlew`. При первом запуске Wrapper скачивает закреплённую версию Gradle.
 
-Java 25 — текущая LTS-версия (сентябрь 2025), поэтому проект целится в неё, а не в не-LTS Java 27. Для более новой версии поднимите `maven.compiler.release` в `pom.xml`.
-
-Команды из этой папки (нужны JDK 25 и Maven 3.9+):
+## Сборка и тесты
 
 ```sh
-mvn -q compile
-mvn -q package
-java -jar target/uptime-backend-0.1.0.jar
-mvn test
+sh ./gradlew build
 ```
 
-Сборка создаёт `target/uptime-backend-0.1.0.jar`; на сервере для запуска достаточно JDK 25. Каталог `target/` не коммитится.
+JUnit запускает HTTP-проверки через MockMvc. Testcontainers поднимает отдельный PostgreSQL 17, поэтому для `build` и `test` нужен работающий Docker. ArchUnit проверяет границу между `accounts` и `risks`. Чтобы собрать исполняемый JAR отдельно, используйте `sh ./gradlew bootJar`.
 
-Предметная логика мониторинга пока не реализована: текущий этап проекта — автономный прототип реестра рисков во фронтенде.
+## Запуск
+
+Создайте пустую базу PostgreSQL и задайте переменные окружения для приложения.
+
+| Переменная | Значение |
+| --- | --- |
+| `SPRING_DATASOURCE_URL` | JDBC-адрес, например `jdbc:postgresql://localhost:5432/risk_register` |
+| `SPRING_DATASOURCE_USERNAME` | Пользователь PostgreSQL с правами на миграции и операции приложения |
+| `SPRING_DATASOURCE_PASSWORD` | Пароль пользователя PostgreSQL |
+
+На пустой базе выполните команду из приватного терминала. Она применит миграции, создаст первого администратора и один раз напечатает временный пароль для личной передачи.
+
+```sh
+java -jar build/libs/uptime-backend-0.1.0.jar bootstrap-admin operator "Администратор пилота"
+```
+
+Для запуска API используйте тот же JAR с той же конфигурацией базы.
+
+```sh
+java -jar build/libs/uptime-backend-0.1.0.jar
+```
+
+Клиент подключается к API через HTTPS. Cookies сессии и CSRF помечаются `Secure`. Вход допускает до 5 попыток на логин и до 30 на сетевой адрес за 15 минут. Срок сессии 12 часов.

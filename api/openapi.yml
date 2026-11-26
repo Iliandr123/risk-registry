@@ -1,0 +1,1118 @@
+openapi: 3.1.2
+info:
+  title: API командного реестра рисков
+  version: 0.1.0
+  description: |
+    API пилота доступен по тому же HTTPS-адресу, что и интерфейс.
+    Для всех операций, кроме получения CSRF-токена и входа, нужна действующая сессия.
+    До смены временного пароля доступны получение токена, выход и смена пароля.
+    Роли администратора и ревьюера независимы. Рабочие операции требуют активного
+    аккаунта. Ответы с данными, токенами и ошибками возвращаются с Cache-Control: no-store.
+servers:
+  - url: /api
+security:
+  - SessionCookie: []
+tags:
+  - name: Аутентификация и профиль
+    description: CSRF-токен, вход, выход, текущий профиль и смена пароля.
+  - name: Администрирование
+    description: Создание учётных записей, управление ролями и активностью, сброс паролей.
+  - name: Участники
+    description: Список активных участников для выбора владельца риска.
+  - name: Риски
+    description: Реестр, архив, карточки, черновики, ревью, история и подтверждение оценки.
+paths:
+  /csrf:
+    get:
+      operationId: getCsrfToken
+      tags: [Аутентификация и профиль]
+      summary: Получить CSRF-токен
+      description: |
+        Доступно до входа и в действующей сессии, в том числе до смены временного пароля.
+        До входа токен привязан к контексту из cookie __Host-risk_csrf, а после входа
+        и смены пароля клиент получает новый токен, привязанный к новой сессии.
+      security:
+        - SessionCookie: []
+        - {}
+      responses:
+        '200':
+          description: CSRF-токен для заголовка X-CSRF-Token
+          headers:
+            Set-Cookie:
+              description: Cookie контекста CSRF до входа с Path=/, Secure, HttpOnly и SameSite=Lax.
+              schema: { type: string }
+              example: '__Host-risk_csrf=opaque; Path=/; Secure; HttpOnly; SameSite=Lax'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CsrfToken'
+
+  /session:
+    post:
+      operationId: createSession
+      tags: [Аутентификация и профиль]
+      summary: Войти по локальной учётной записи
+      description: |
+        Требуется пара из GET /csrf до входа. Для неверных учётных данных и
+        отключённого аккаунта ответ одинаков. Клиент читает mustChangePassword
+        в ответе, чтобы направить участника на смену временного пароля.
+      security:
+        - CsrfContextCookie: []
+          CsrfHeader: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+      responses:
+        '200':
+          description: Создана серверная сессия
+          headers:
+            Set-Cookie:
+              $ref: '#/components/headers/SessionCookie'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Account'
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '401':
+          $ref: '#/components/responses/InvalidCredentials'
+        '403':
+          $ref: '#/components/responses/CsrfRejected'
+        '429':
+          $ref: '#/components/responses/LoginRateLimited'
+    delete:
+      operationId: deleteSession
+      tags: [Аутентификация и профиль]
+      summary: Выйти из приложения
+      description: Доступно до смены временного пароля. Сервер прекращает текущую сессию.
+      security:
+        - SessionCookie: []
+          CsrfHeader: []
+      responses:
+        '204':
+          description: Сессия завершена
+          headers:
+            Set-Cookie:
+              description: Удаление cookie сессии
+              schema: { type: string }
+              example: '__Host-risk_session=; Path=/; Max-Age=0; Secure; HttpOnly; SameSite=Lax'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/CsrfRejected'
+
+  /me:
+    get:
+      operationId: getProfile
+      tags: [Аутентификация и профиль]
+      summary: Прочитать текущий профиль
+      responses:
+        '200':
+          description: Профиль участника
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Account'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /me/password:
+    post:
+      operationId: changePassword
+      tags: [Аутентификация и профиль]
+      summary: Сменить пароль текущей учётной записи
+      description: Доступно с временным паролем. Успех заменяет текущую сессию новой.
+      security:
+        - SessionCookie: []
+          CsrfHeader: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChangePasswordRequest'
+      responses:
+        '204':
+          description: Пароль изменён
+          headers:
+            Set-Cookie:
+              $ref: '#/components/headers/SessionCookie'
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: Текущий пароль неверен или CSRF-проверка не прошла
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              examples:
+                invalidPassword:
+                  value: { code: INVALID_CURRENT_PASSWORD, message: Текущий пароль неверен. }
+                csrf:
+                  value: { code: CSRF_REJECTED, message: Обновите CSRF-токен и повторите запрос. }
+
+  /admin/accounts:
+    get:
+      operationId: listAccounts
+      tags: [Администрирование]
+      summary: Получить список аккаунтов
+      description: Только администратор. Включает отключённые аккаунты.
+      responses:
+        '200':
+          description: Аккаунты команды
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Account'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+    post:
+      operationId: createAccount
+      tags: [Администрирование]
+      summary: Создать аккаунт
+      description: Только администратор. Временный пароль выдаётся в этом ответе для личной передачи.
+      security:
+        - SessionCookie: []
+          CsrfHeader: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateAccountRequest'
+      responses:
+        '201':
+          $ref: '#/components/responses/TemporaryPassword'
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/ForbiddenOrCsrfRejected'
+        '409':
+          description: Логин уже занят
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example: { code: LOGIN_ALREADY_EXISTS, message: Такой логин уже занят. }
+
+  /admin/accounts/{id}:
+    parameters:
+      - $ref: '#/components/parameters/AccountId'
+    patch:
+      operationId: updateAccount
+      tags: [Администрирование]
+      summary: Изменить роли или активность аккаунта
+      description: |
+        Только администратор. Отключение аккаунта или изменение любой роли
+        отзывает все сессии этого аккаунта. Повторное включение требует нового входа.
+      security:
+        - SessionCookie: []
+          CsrfHeader: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateAccountRequest'
+      responses:
+        '200':
+          description: Обновлённый аккаунт
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Account'
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/ForbiddenOrCsrfRejected'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: Действие оставило бы команду без активного администратора
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example: { code: LAST_ACTIVE_ADMIN, message: Должен остаться хотя бы один активный администратор. }
+
+  /admin/accounts/{id}/reset-password:
+    parameters:
+      - $ref: '#/components/parameters/AccountId'
+    post:
+      operationId: resetPassword
+      tags: [Администрирование]
+      summary: Сбросить пароль участника
+      description: |
+        Только администратор. Все сессии аккаунта отзываются. Временный пароль
+        выдаётся в этом ответе для личной передачи.
+      security:
+        - SessionCookie: []
+          CsrfHeader: []
+      responses:
+        '200':
+          $ref: '#/components/responses/TemporaryPassword'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/ForbiddenOrCsrfRejected'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /participants:
+    get:
+      operationId: listParticipants
+      tags: [Участники]
+      summary: Выбрать владельца риска
+      responses:
+        '200':
+          description: ID и имена активных участников
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Participant'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /risks:
+    get:
+      operationId: listRisks
+      tags: [Риски]
+      summary: Получить реестр, архив, личные предложения или очередь ревью
+      description: |
+        active и archive доступны всем активным участникам. Они возвращают утверждённые
+        риски по убыванию балла, затем по названию. Поиск и фильтры применяются к этим
+        двум представлениям. mine показывает только версии текущего автора, включая
+        результаты отзыва и закрытия. review доступно ревьюеру и показывает отправленные
+        версии в очереди. История возвращённых и выбывших версий доступна по правилам
+        видимости в GET /risks/{id}/history.
+      parameters:
+        - name: view
+          in: query
+          description: Представление реестра
+          schema:
+            type: string
+            enum: [active, archive, mine, review]
+            default: active
+        - name: q
+          in: query
+          description: Поиск по названию, причине, возможному событию и последствиям для продукта
+          schema: { type: string }
+        - name: ownerId
+          in: query
+          description: Фильтр по ID владельца
+          schema:
+            $ref: '#/components/schemas/Id'
+        - name: category
+          in: query
+          description: Фильтр по категории приоритета
+          schema:
+            $ref: '#/components/schemas/Category'
+      responses:
+        '200':
+          description: Выбранное представление и доступные строки
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/PublishedRiskList'
+                  - $ref: '#/components/schemas/ProposalList'
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+    post:
+      operationId: createRisk
+      tags: [Риски]
+      summary: Создать риск и его первый черновик
+      description: |
+        Доступно любому активному участнику. Пропущенный ownerId заполняется ID автора.
+        Риск получает постоянный ID, а черновик получает собственный ID и номер изменения 1.
+      security:
+        - SessionCookie: []
+          CsrfHeader: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DraftFields'
+            example: {}
+      responses:
+        '201':
+          description: Создан первый черновик
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Proposal'
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/ForbiddenOrCsrfRejected'
+
+  /risks/{id}:
+    parameters:
+      - $ref: '#/components/parameters/RiskId'
+    get:
+      operationId: getRisk
+      tags: [Риски]
+      summary: Прочитать опубликованную карточку
+      description: |
+        Доступно всем активным участникам после первой публикации, включая архив.
+        Все видят наличие незавершённой правки. Если правку создал другой участник,
+        ревьюер дополнительно получает метаданные для её разблокировки.
+      responses:
+        '200':
+          description: Карточка с текущей утверждённой версией
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PublishedRisk'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /risks/{id}/history:
+    parameters:
+      - $ref: '#/components/parameters/RiskId'
+    get:
+      operationId: getRiskHistory
+      tags: [Риски]
+      summary: Прочитать доступную историю риска
+      description: |
+        После публикации общая история содержит утверждённые снимки и события
+        утверждения и подтверждения оценки. История предложения доступна автору,
+        а ревьюерам — после отправки предложения, включая возврат, отзыв и закрытие.
+        События и содержимое приватного черновика доступны в истории только автору,
+        включая результат разблокировки чужого черновика. Если риск ещё не опубликован
+        и у участника нет доступа к его предложениям, возвращается 404.
+      responses:
+        '200':
+          description: Утверждённые снимки и события в пределах прав участника
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RiskHistory'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /risks/{id}/draft:
+    parameters:
+      - $ref: '#/components/parameters/RiskId'
+    post:
+      operationId: openRiskDraft
+      tags: [Риски]
+      summary: Открыть правку опубликованного риска
+      description: |
+        Любой активный участник может открыть правку текущего снимка активного риска.
+        Новая версия начинает с полей опубликованного снимка и номера изменения 1.
+        Если снимок устарел или уже есть незавершённая правка, возвращается 409.
+      security:
+        - SessionCookie: []
+          CsrfHeader: []
+      requestBody:
+        $ref: '#/components/requestBodies/ExpectedSnapshot'
+      responses:
+        '201':
+          description: Правка открыта
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Proposal'
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/ForbiddenOrCsrfRejected'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/RiskConflict'
+    get:
+      operationId: getRiskDraft
+      tags: [Риски]
+      summary: Прочитать незавершённую версию
+      description: |
+        Черновик доступен автору. Отправленная и возвращённая версии доступны автору
+        и ревьюерам. Запрос чужого приватного черновика возвращает 404, в том числе ревьюеру.
+      responses:
+        '200':
+          description: Доступная незавершённая версия
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Proposal'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    patch:
+      operationId: saveRiskDraft
+      tags: [Риски]
+      summary: Сохранить поля незавершённой версии
+      description: |
+        Только автор версии в статусе DRAFT или RETURNED. Отсутствующие поля
+        сохраняют прежние значения, а null очищает допускающее его поле.
+        Версия на ревью, смена версии или устаревший номер изменения дают 409
+        для участника, имевшего право сохранить переданную версию.
+      security:
+        - SessionCookie: []
+          CsrfHeader: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SaveDraftRequest'
+      responses:
+        '200':
+          description: Сохранённая версия с актуальным номером изменения
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Proposal'
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/ForbiddenOrCsrfRejected'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/RiskConflict'
+
+  /risks/{id}/draft/{action}:
+    parameters:
+      - $ref: '#/components/parameters/RiskId'
+      - name: action
+        in: path
+        required: true
+        schema:
+          type: string
+          enum: [submit, return, approve, withdraw, unblock]
+    post:
+      operationId: actOnRiskDraft
+      tags: [Риски]
+      summary: Выполнить действие над предложением
+      description: |
+        - submit — автор отправляет DRAFT или RETURNED с заполненными названием,
+          причиной, возможным событием, последствиями для продукта, владельцем и оценками.
+        - return — ревьюер возвращает IN_REVIEW автору. Требуется непустой comment.
+        - approve — ревьюер утверждает IN_REVIEW, включая собственное предложение.
+          Первая публикация и смена владельца требуют активного владельца на момент
+          одобрения. Прежний отключённый владелец допускается. Завершение риска требует
+          причины в closureReason. При успехе ни один утверждённый снимок не меняется,
+          а указатель публикации переключается на утверждаемую версию.
+        - withdraw — автор отзывает DRAFT, IN_REVIEW или RETURNED. Для первого
+          предложения повторная подача начинается с нового риска.
+        - unblock — ревьюер закрывает чужую незавершённую правку или первое предложение
+          в статусе IN_REVIEW или RETURNED. Требуется непустой comment. Первый
+          приватный черновик недоступен для этого действия.
+
+        Устаревшее действие участника с правами на переданную версию возвращает 409
+        без изменений. Это относится и к одновременным отзыву и утверждению.
+      security:
+        - SessionCookie: []
+          CsrfHeader: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DraftActionRequest'
+      responses:
+        '200':
+          description: Результат перехода с актуальным статусом и номером изменения
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DraftActionResult'
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/ForbiddenOrCsrfRejected'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: Версия устарела, переход недоступен или новый владелец отключён
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              examples:
+                staleVersion:
+                  $ref: '#/components/examples/RiskConflict'
+                ownerInactive:
+                  value:
+                    code: OWNER_INACTIVE
+                    message: Верните предложение автору, чтобы он выбрал активного владельца.
+
+  /risks/{id}/assessment/confirm:
+    parameters:
+      - $ref: '#/components/parameters/RiskId'
+    post:
+      operationId: confirmRiskAssessment
+      tags: [Риски]
+      summary: Подтвердить оценку текущего опубликованного снимка
+      description: |
+        Только ревьюер. Для активного риска обновляет дату оценки и добавляет событие
+        в историю. Открытая правка сохраняет свои поля, статус и номер изменения.
+        Устаревший снимок отклоняется без изменения даты.
+      security:
+        - SessionCookie: []
+          CsrfHeader: []
+      requestBody:
+        $ref: '#/components/requestBodies/ExpectedSnapshot'
+      responses:
+        '200':
+          description: Карточка с обновлённой датой оценки
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PublishedRisk'
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/ForbiddenOrCsrfRejected'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/RiskConflict'
+
+components:
+  securitySchemes:
+    SessionCookie:
+      type: apiKey
+      in: cookie
+      name: __Host-risk_session
+      description: Непрозрачный токен серверной сессии. Истёкшие и отозванные сессии дают 401.
+    CsrfContextCookie:
+      type: apiKey
+      in: cookie
+      name: __Host-risk_csrf
+      description: Контекст до входа, выдаваемый GET /csrf для проверки токена в запросе входа.
+    CsrfHeader:
+      type: apiKey
+      in: header
+      name: X-CSRF-Token
+      description: Токен из GET /csrf, привязанный к контексту до входа или к текущей сессии.
+  headers:
+    SessionCookie:
+      description: |
+        Устанавливает cookie сессии с Path=/, Secure, HttpOnly и SameSite=Lax.
+        Клиент заново запрашивает GET /csrf.
+      schema: { type: string }
+      example: '__Host-risk_session=opaque; Path=/; Secure; HttpOnly; SameSite=Lax'
+  parameters:
+    AccountId:
+      name: id
+      in: path
+      required: true
+      description: ID аккаунта
+      schema:
+        $ref: '#/components/schemas/Id'
+    RiskId:
+      name: id
+      in: path
+      required: true
+      description: Постоянный ID риска
+      schema:
+        $ref: '#/components/schemas/Id'
+  requestBodies:
+    ExpectedSnapshot:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            additionalProperties: false
+            required: [expectedPublishedVersionId]
+            properties:
+              expectedPublishedVersionId:
+                $ref: '#/components/schemas/Id'
+  responses:
+    InvalidRequest:
+      description: Запрос не соответствует схеме или нарушает правила заполнения
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            code: INVALID_REQUEST
+            message: Укажите вероятность целым числом от 1 до 10.
+            fieldErrors:
+              likelihood: Укажите целое число от 1 до 10.
+    InvalidCredentials:
+      description: Вход отклонён
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example: { code: INVALID_CREDENTIALS, message: Не удалось войти с этими учётными данными. }
+    Unauthorized:
+      description: Требуется действующая сессия
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example: { code: AUTHENTICATION_REQUIRED, message: Войдите в приложение. }
+    Forbidden:
+      description: Не хватает прав или требуется сменить временный пароль
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          examples:
+            accessDenied:
+              $ref: '#/components/examples/Forbidden'
+            passwordChangeRequired:
+              $ref: '#/components/examples/PasswordChangeRequired'
+    ForbiddenOrCsrfRejected:
+      description: Не хватает прав, требуется сменить временный пароль или CSRF-проверка не прошла
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          examples:
+            accessDenied:
+              $ref: '#/components/examples/Forbidden'
+            passwordChangeRequired:
+              $ref: '#/components/examples/PasswordChangeRequired'
+            csrf:
+              $ref: '#/components/examples/CsrfRejected'
+    CsrfRejected:
+      description: CSRF-токен отсутствует или не соответствует контексту
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          examples:
+            csrf:
+              $ref: '#/components/examples/CsrfRejected'
+    NotFound:
+      description: Запись отсутствует или недоступна по правилам видимости
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example: { code: NOT_FOUND, message: Запись не найдена. }
+    RiskConflict:
+      description: Снимок или версия устарели либо состояние риска не позволяет действие
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          examples:
+            riskConflict:
+              $ref: '#/components/examples/RiskConflict'
+    LoginRateLimited:
+      description: Превышен лимит попыток входа
+      headers:
+        Retry-After:
+          description: Сколько секунд ждать до следующей попытки
+          required: true
+          schema: { type: integer, minimum: 1 }
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example: { code: LOGIN_RATE_LIMITED, message: Попробуйте войти позже. }
+    TemporaryPassword:
+      description: Данные аккаунта и временный пароль для однократного показа
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/TemporaryPasswordResult'
+  examples:
+    Forbidden:
+      value: { code: FORBIDDEN, message: У вас нет прав на это действие. }
+    PasswordChangeRequired:
+      value: { code: PASSWORD_CHANGE_REQUIRED, message: Смените временный пароль. }
+    CsrfRejected:
+      value: { code: CSRF_REJECTED, message: Обновите CSRF-токен и повторите запрос. }
+    RiskConflict:
+      value: { code: RISK_CONFLICT, message: Обновите карточку и повторите действие. }
+  schemas:
+    Id:
+      type: string
+      format: uuid
+    Revision:
+      type: integer
+      format: int64
+      minimum: 1
+      description: Номер версии предложения увеличивается при изменении полей или статуса.
+    NonBlankText:
+      type: string
+      pattern: '\S'
+    ScoreInput:
+      type: integer
+      minimum: 1
+      maximum: 10
+    Category:
+      type: string
+      enum: [LOW, MEDIUM, HIGH]
+      description: LOW — 1–19, MEDIUM — 20–39, HIGH — 40–100.
+    RiskState:
+      type: string
+      enum: [ACTIVE, REMOVED, MATERIALIZED]
+    ProposalStatus:
+      type: string
+      enum: [DRAFT, IN_REVIEW, RETURNED, APPROVED, WITHDRAWN, CLOSED]
+    Error:
+      type: object
+      additionalProperties: false
+      required: [code, message]
+      properties:
+        code: { type: string }
+        message: { type: string }
+        fieldErrors:
+          type: object
+          additionalProperties: { type: string }
+    CsrfToken:
+      type: object
+      additionalProperties: false
+      required: [token]
+      properties:
+        token: { type: string, minLength: 1 }
+    LoginRequest:
+      type: object
+      additionalProperties: false
+      required: [login, password]
+      properties:
+        login:
+          $ref: '#/components/schemas/NonBlankText'
+        password: { type: string, format: password, minLength: 1 }
+    ChangePasswordRequest:
+      type: object
+      additionalProperties: false
+      required: [currentPassword, newPassword]
+      properties:
+        currentPassword: { type: string, format: password, minLength: 1 }
+        newPassword: { type: string, format: password, minLength: 1 }
+    Account:
+      type: object
+      additionalProperties: false
+      required: [id, login, displayName, active, isAdmin, isReviewer, mustChangePassword]
+      properties:
+        id:
+          $ref: '#/components/schemas/Id'
+        login:
+          $ref: '#/components/schemas/NonBlankText'
+        displayName:
+          $ref: '#/components/schemas/NonBlankText'
+        active: { type: boolean }
+        isAdmin: { type: boolean }
+        isReviewer: { type: boolean }
+        mustChangePassword: { type: boolean }
+    CreateAccountRequest:
+      type: object
+      additionalProperties: false
+      required: [login, displayName]
+      properties:
+        login:
+          $ref: '#/components/schemas/NonBlankText'
+        displayName:
+          $ref: '#/components/schemas/NonBlankText'
+        isAdmin: { type: boolean, default: false }
+        isReviewer: { type: boolean, default: false }
+    UpdateAccountRequest:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      properties:
+        active: { type: boolean }
+        isAdmin: { type: boolean }
+        isReviewer: { type: boolean }
+    TemporaryPasswordResult:
+      type: object
+      additionalProperties: false
+      required: [account, temporaryPassword]
+      properties:
+        account:
+          $ref: '#/components/schemas/Account'
+        temporaryPassword: { type: string, format: password, minLength: 1 }
+    Participant:
+      type: object
+      additionalProperties: false
+      required: [id, displayName]
+      properties:
+        id:
+          $ref: '#/components/schemas/Id'
+        displayName:
+          $ref: '#/components/schemas/NonBlankText'
+    Owner:
+      type: object
+      additionalProperties: false
+      required: [id, displayName, active]
+      properties:
+        id:
+          $ref: '#/components/schemas/Id'
+        displayName:
+          $ref: '#/components/schemas/NonBlankText'
+        active:
+          type: boolean
+          description: При false интерфейс показывает пометку «Отключён».
+    DraftFields:
+      type: object
+      additionalProperties: false
+      properties:
+        title: { type: [string, 'null'] }
+        cause: { type: [string, 'null'] }
+        possibleEvent: { type: [string, 'null'] }
+        productConsequences: { type: [string, 'null'] }
+        ownerId: { type: [string, 'null'], format: uuid }
+        likelihood: { type: [integer, 'null'], minimum: 1, maximum: 10 }
+        impact: { type: [integer, 'null'], minimum: 1, maximum: 10 }
+        decisionNote: { type: [string, 'null'] }
+        trackerUrl: { type: [string, 'null'], format: uri }
+        riskState:
+          $ref: '#/components/schemas/RiskState'
+        closureReason: { type: [string, 'null'] }
+    SaveDraftRequest:
+      type: object
+      additionalProperties: false
+      required: [versionId, expectedRevision, fields]
+      properties:
+        versionId:
+          $ref: '#/components/schemas/Id'
+        expectedRevision:
+          $ref: '#/components/schemas/Revision'
+        fields:
+          $ref: '#/components/schemas/DraftFields'
+    DraftActionRequest:
+      type: object
+      additionalProperties: false
+      required: [versionId, expectedRevision]
+      properties:
+        versionId:
+          $ref: '#/components/schemas/Id'
+        expectedRevision:
+          $ref: '#/components/schemas/Revision'
+        comment:
+          $ref: '#/components/schemas/NonBlankText'
+          description: Обязателен для return и unblock. Для остальных действий необязателен.
+    ProposalIdentity:
+      type: object
+      required: [riskId, versionId, revision, status]
+      properties:
+        riskId:
+          $ref: '#/components/schemas/Id'
+        versionId:
+          $ref: '#/components/schemas/Id'
+        revision:
+          $ref: '#/components/schemas/Revision'
+        status:
+          $ref: '#/components/schemas/ProposalStatus'
+    DraftActionResult:
+      $ref: '#/components/schemas/ProposalIdentity'
+      unevaluatedProperties: false
+    Proposal:
+      $ref: '#/components/schemas/ProposalIdentity'
+      required: [kind, author, fields]
+      properties:
+        kind: { type: string, enum: [FIRST, EDIT] }
+        author:
+          $ref: '#/components/schemas/Participant'
+        fields:
+          $ref: '#/components/schemas/DraftFields'
+      unevaluatedProperties: false
+    ProposalList:
+      type: object
+      additionalProperties: false
+      required: [view, items]
+      properties:
+        view: { type: string, enum: [mine, review] }
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Proposal'
+    UnblockMetadata:
+      type: object
+      additionalProperties: false
+      required: [versionId, revision, authorDisplayName]
+      properties:
+        versionId:
+          $ref: '#/components/schemas/Id'
+        revision:
+          $ref: '#/components/schemas/Revision'
+        authorDisplayName:
+          $ref: '#/components/schemas/NonBlankText'
+    Assessment:
+      type: object
+      additionalProperties: false
+      required: [date, reviewDueDate, reviewRequired]
+      description: |
+        Первая публикация, изменение оценок и явное подтверждение обновляют дату оценки.
+        Срок пересмотра равен дате оценки плюс три календарных месяца в часовом
+        поясе команды с переносом на последний день короткого месяца.
+        reviewRequired становится true для активного риска в день наступления срока.
+      properties:
+        date: { type: string, format: date }
+        reviewDueDate: { type: string, format: date }
+        reviewRequired: { type: boolean }
+    PublishedRiskSummary:
+      type: object
+      additionalProperties: false
+      required: [riskId, publishedVersionId, title, owner, likelihood, impact, priority, riskState, assessment, hasOpenDraft]
+      properties:
+        riskId:
+          $ref: '#/components/schemas/Id'
+        publishedVersionId:
+          $ref: '#/components/schemas/Id'
+        title:
+          $ref: '#/components/schemas/NonBlankText'
+        owner:
+          $ref: '#/components/schemas/Owner'
+        likelihood:
+          $ref: '#/components/schemas/ScoreInput'
+        impact:
+          $ref: '#/components/schemas/ScoreInput'
+        priority:
+          $ref: '#/components/schemas/Priority'
+        riskState:
+          $ref: '#/components/schemas/RiskState'
+        assessment:
+          $ref: '#/components/schemas/Assessment'
+        hasOpenDraft: { type: boolean }
+    PublishedRiskList:
+      type: object
+      additionalProperties: false
+      required: [view, items]
+      properties:
+        view: { type: string, enum: [active, archive] }
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/PublishedRiskSummary'
+    Priority:
+      type: object
+      additionalProperties: false
+      required: [score, category, criticalImpact]
+      properties:
+        score: { type: integer, minimum: 1, maximum: 100, description: Вероятность × влияние. }
+        category:
+          $ref: '#/components/schemas/Category'
+        criticalImpact: { type: boolean, description: true при влиянии 9 или 10. }
+    PublishedSnapshot:
+      type: object
+      additionalProperties: false
+      required: [versionId, title, cause, possibleEvent, productConsequences, owner, likelihood, impact, priority, riskState]
+      properties:
+        versionId:
+          $ref: '#/components/schemas/Id'
+        title:
+          $ref: '#/components/schemas/NonBlankText'
+        cause:
+          $ref: '#/components/schemas/NonBlankText'
+        possibleEvent:
+          $ref: '#/components/schemas/NonBlankText'
+        productConsequences:
+          $ref: '#/components/schemas/NonBlankText'
+        owner:
+          $ref: '#/components/schemas/Owner'
+        likelihood:
+          $ref: '#/components/schemas/ScoreInput'
+        impact:
+          $ref: '#/components/schemas/ScoreInput'
+        priority:
+          $ref: '#/components/schemas/Priority'
+        decisionNote: { type: [string, 'null'] }
+        trackerUrl: { type: [string, 'null'], format: uri }
+        riskState:
+          $ref: '#/components/schemas/RiskState'
+        closureReason: { type: [string, 'null'] }
+      if:
+        properties:
+          riskState: { enum: [REMOVED, MATERIALIZED] }
+      then:
+        required: [closureReason]
+        properties:
+          closureReason:
+            $ref: '#/components/schemas/NonBlankText'
+    PublishedRisk:
+      type: object
+      additionalProperties: false
+      required: [riskId, snapshot, assessment, hasOpenDraft]
+      properties:
+        riskId:
+          $ref: '#/components/schemas/Id'
+        snapshot:
+          $ref: '#/components/schemas/PublishedSnapshot'
+        assessment:
+          $ref: '#/components/schemas/Assessment'
+        hasOpenDraft: { type: boolean }
+        unblock:
+          $ref: '#/components/schemas/UnblockMetadata'
+          description: Только для ревьюера при незавершённой правке другого участника.
+      if:
+        properties:
+          hasOpenDraft: { const: false }
+      then:
+        properties:
+          unblock: false
+    RiskEvent:
+      type: object
+      additionalProperties: false
+      required: [versionId, actor, action, occurredAt]
+      properties:
+        versionId:
+          $ref: '#/components/schemas/Id'
+        actor:
+          $ref: '#/components/schemas/Participant'
+        action:
+          type: string
+          enum: [SUBMIT, RETURN, APPROVE, WITHDRAW, UNBLOCK, CONFIRM_ASSESSMENT]
+        occurredAt: { type: string, format: date-time }
+        comment: { type: [string, 'null'] }
+    RiskHistory:
+      type: object
+      additionalProperties: false
+      required: [riskId, publishedVersions, events]
+      properties:
+        riskId:
+          $ref: '#/components/schemas/Id'
+        publishedVersions:
+          type: array
+          items:
+            $ref: '#/components/schemas/PublishedSnapshot'
+        events:
+          type: array
+          items:
+            $ref: '#/components/schemas/RiskEvent'

@@ -4,15 +4,15 @@
 
 The repository was originally scaffolded for an uptime monitoring service, with a Go backend and a Next.js frontend. Work has since pivoted: the current stage validates the team's product risk-management process before the service is designed.
 
-The active deliverable is a standalone prototype of a team risk register, `frontend/public/risk-register.prototype.html`. It walks through propose → review → publish → quarterly review → complete with simulated roles and privacy, and keeps all data in memory. The prototype stays standalone: no authentication, server, database, or integrations.
+The standalone prototype of a team risk register, `frontend/public/risk-register.prototype.html`, walks through propose → review → publish → quarterly review → complete with simulated roles and privacy. The prototype stays standalone and keeps all data in memory.
 
-The backend scaffold was migrated from Go to Java 25 LTS (Maven) because the deployment target supports Java and needs long-term support; it still holds no service logic. Until the prototype stage closes, do not implement uptime monitoring domain logic or build service infrastructure. The stage closes when team members can pass the author and reviewer scenarios unaided and explain risk priority and the difference between a proposal and the published version; actual team participation is checked later in a joint pilot, not by automated tests.
+The approved `pilot-risk-register` change defines the scope of the working pilot. Before launching it with the team, team members must pass the prototype's author and reviewer scenarios unaided and explain risk priority and the difference between a proposal and the published version. Uptime monitoring domain logic is outside the pilot scope.
 
 ## Project Structure & Module Organization
 
 This repository contains two independent projects, each with its own README and build configuration. No shared workspace tooling exists.
 
-- `backend/`: Java 25 LTS (Maven) scaffold for the future monitoring service, intentionally empty in this stage. Follow `backend/AGENTS.md`.
+- `backend/`: Java 25 LTS and Spring Boot backend for the pilot, built with Gradle Wrapper. Follow `backend/AGENTS.md`.
 - `frontend/`: Next.js application that also hosts the current deliverable, the standalone risk-register prototype under `public/`. Follow `frontend/AGENTS.md`.
 
 These root guidelines apply to both projects. Project-specific `AGENTS.md` files supplement them within their respective directories.
