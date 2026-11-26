@@ -23,6 +23,7 @@ These root guidelines apply to both projects. Project-specific `AGENTS.md` files
 - **Proposed changes:** read `openspec/changes/<name>/` for the proposal, spec delta, design, and tasks. Use the OpenSpec CLI from the repository root to create and validate changes. After implementation and verification, archive the change through OpenSpec to update the current specs.
 - **Past decisions:** consult [the change archive](openspec/changes/archive/) for completed proposals, design decisions, tasks, and spec deltas.
 - **OpenSpec context and artifact rules:** consult [openspec/config.yaml](openspec/config.yaml) when preparing an OpenSpec change.
+- **HTTP-контракт пилота.** Сверяйтесь с [api/openapi.yml](api/openapi.yml) при работе с API. Если меняется наблюдаемое HTTP-поведение, сначала обновите контракт, затем код бэкенда и клиента.
 - **Setup and commands:** start with the [project README](README.md). For work in a specific project, read its local guidelines and README: [frontend guidelines](frontend/AGENTS.md), [frontend setup](frontend/README.md), [backend guidelines](backend/AGENTS.md), and [backend setup](backend/README.md).
 - **Prototype verification:** follow the [prototype test guide](frontend/tests/README.md) for the automated check, manual scenarios, and team acceptance.
 
