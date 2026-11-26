@@ -1,0 +1,235 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; connect-src 'none'; form-action 'none'; base-uri 'none'">
+<title>Командный реестр рисков · Прототип</title>
+<style>
+*{box-sizing:border-box}body{margin:0;background:#f4f5f7;color:#202c3b;font:15px/1.55 system-ui,sans-serif}header,main{max-width:1440px;margin:auto;padding:24px 32px}header{border-bottom:1px solid #d9dee6}h1{margin:6px 0;font-size:30px}h2{font-size:22px;margin:0 0 14px}h3{font-size:17px}p{margin:8px 0}.eyebrow{font-size:12px;letter-spacing:.12em;color:#486383;font-weight:700}.muted,small{color:#5b6879}button,select,input,textarea{font:inherit;border:1px solid #c3cdd9;border-radius:6px;padding:9px 12px;background:white;color:inherit}button{cursor:pointer}button:hover{border-color:#245ab7;background:#edf3ff}button.primary,button[aria-pressed=true]{background:#245ab7;color:white;border-color:#245ab7}button:disabled{opacity:.5;cursor:default}button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible{outline:3px solid #8ab7ff;outline-offset:2px}.bar{display:flex;gap:10px;flex-wrap:wrap;align-items:center}.spread{justify-content:space-between}.panel{background:white;border:1px solid #dae0e8;border-radius:10px;padding:22px;margin-bottom:20px}nav{margin:22px 0}.layout{display:grid;grid-template-columns:minmax(0,1.35fr) minmax(360px,1fr);gap:20px}.table-wrap{overflow:auto}table{width:100%;border-collapse:collapse;font-size:13px}th{text-align:left;color:#596a80;font-weight:600;white-space:nowrap}th,td{padding:12px 8px;border-bottom:1px solid #e5e9ef;vertical-align:top}td button{padding:0;border:0;background:none;text-align:left;color:#245ab7;font-weight:600}.badge{display:inline-block;padding:2px 8px;border-radius:4px;font-size:12px;font-weight:600;white-space:nowrap}.low{background:#e2f3e8;color:#23633d}.medium{background:#fff2c7;color:#795a0a}.high{background:#fbe1e0;color:#983e39}.neutral{background:#edf0f5;color:#465873}.critical{color:#983e39;font-size:12px;font-weight:600}.notice{border-left:4px solid #245ab7;padding:12px 16px;background:#eaf1fc;margin:16px 0}.error{border-color:#b4453d;background:#fceceb;color:#852f29}label{display:block;font-size:13px;font-weight:600;margin:12px 0 5px}input,textarea{width:100%}textarea{min-height:72px;resize:vertical}.two{display:grid;grid-template-columns:1fr 1fr;gap:12px}.filters input{min-width:150px;flex:1}.filters select{max-width:220px}dl{margin:12px 0}dt{font-size:12px;color:#657286;margin-top:10px}dd{margin:2px 0;white-space:pre-wrap;overflow-wrap:anywhere}details{border-top:1px solid #e0e5ec;padding:12px 0}summary{cursor:pointer;font-weight:600}.history{border-left:2px solid #dce4ef;padding-left:16px;margin-top:16px}.scenario-steps{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px}.scenario-steps button{font-size:13px}.selected{background:#edf3ff}#feedback{position:sticky;top:0;z-index:2;margin:0 0 20px}a{color:#245ab7}.empty{padding:25px 8px;color:#657286}#participant{max-width:100%}footer{font-size:12px;color:#657286;margin:24px 0}@media(max-width:1050px){.layout{grid-template-columns:1fr}}@media(max-width:600px){header,main{padding:16px}.panel{padding:16px}.two{grid-template-columns:1fr}h1{font-size:24px}}
+</style>
+</head>
+<body>
+<header>
+<div class="bar spread"><span class="eyebrow">ДЕМО · ОДНА КОМАНДА · ДАННЫЕ В ПАМЯТИ</span><div><label for="participant">Вы действуете как</label><select id="participant"></select></div></div>
+<h1>Командный реестр рисков</h1>
+<p>Понятен ли путь от предложения до ревью, публикации, пересмотра и завершения риска?</p>
+<p class="muted">Прототип для проверки сценариев. Обновление страницы сбрасывает данные. Переключатель участников имитирует права и приватность и не защищает данные.</p>
+</header>
+<main>
+<section class="panel" aria-label="Проверка сценариев"><div class="bar spread"><h2>Попробуйте сценарий</h2><button id="reset">Сбросить демо</button></div><div id="scenarios" class="bar"></div><div id="walkthrough"></div></section>
+<div id="feedback" class="notice" role="status" aria-live="polite">Свободный режим. Выберите риск или создайте предложение.</div>
+<div class="bar spread"><nav id="tabs" class="bar" aria-label="Разделы реестра"></nav><button id="create" class="primary">+ Предложить риск</button></div>
+<div class="layout"><section class="panel"><h2 id="list-title">Активные риски</h2><div class="bar filters"><input id="search" type="search" aria-label="Поиск по названию и описанию" placeholder="Поиск по названию и описанию"><select id="owner-filter" aria-label="Фильтр по владельцу"></select><select id="category-filter" aria-label="Фильтр по категории"><option value="">Все категории</option><option value="low">Низкий</option><option value="medium">Средний</option><option value="high">Высокий</option></select></div><div class="table-wrap" id="list"></div><p class="muted"><small>Приоритет = вероятность × влияние. Низкий: 1–19 · Средний: 20–39 · Высокий: 40–100. Категории не задают обязательных мер или сроков.</small></p></section><section class="panel" id="card" aria-label="Карточка риска"></section></div>
+<section class="panel"><h2>Что оказалось непонятным?</h2><p class="muted">Зафиксируйте затруднения перед проектированием сервиса. Заметки тоже исчезнут после обновления: скопируйте их перед закрытием.</p><textarea aria-label="Наблюдения по прототипу" placeholder="Сценарий → ожидание → что вызвало вопрос"></textarea><p><small>Участие настоящей команды и работу ревьюеров предстоит проверить на совместном пилоте.</small></p></section>
+<footer>Автономный прототип · Без сервера, входа, базы данных и интеграций.</footer>
+</main>
+<script id="risk-model">
+"use strict";
+const RiskModel = (() => {
+  const people = [{id:"anna",name:"Анна Смирнова",reviewer:false},{id:"ivan",name:"Иван Петров",reviewer:false},{id:"maria",name:"Мария Волкова",reviewer:true},{id:"oleg",name:"Олег Соколов",reviewer:true}];
+  const copy = value => JSON.parse(JSON.stringify(value));
+  const person = id => people.find(p => p.id === id);
+  const category = score => score < 20 ? {key:"low",label:"Низкий"} : score < 40 ? {key:"medium",label:"Средний"} : {key:"high",label:"Высокий"};
+  const assessment = data => {
+    const valid = [data.probability,data.impact].every(n => Number.isInteger(n) && n >= 1 && n <= 10);
+    return valid ? {score:data.probability * data.impact,...category(data.probability * data.impact),critical:data.impact >= 9} : null;
+  };
+  function dueDate(date) {
+    const [year,month,day] = date.split("-").map(Number);
+    const target = new Date(Date.UTC(year,month - 1 + 3,1));
+    const last = new Date(Date.UTC(target.getUTCFullYear(),target.getUTCMonth()+1,0)).getUTCDate();
+    target.setUTCDate(Math.min(day,last));
+    return target.toISOString().slice(0,10);
+  }
+  const overdue = (date,today) => today >= dueDate(date);
+  const canSee = (proposal,actor) => proposal.author === actor || (proposal.status !== "draft" && !!person(actor)?.reviewer);
+  const blank = actor => ({title:"",cause:"",event:"",consequence:"",owner:actor,probability:"",impact:"",notes:"",link:"",status:"active",reason:""});
+  function validate(data) {
+    for (const key of ["title","cause","event","consequence"]) if (!String(data[key] || "").trim()) throw Error("Заполните название, причину, событие и последствия для продукта.");
+    if (!person(data.owner)) throw Error("Выберите владельца риска.");
+    if (!assessment(data)) throw Error("Вероятность и влияние должны быть целыми числами от 1 до 10.");
+    if (!["active","withdrawn","realized"].includes(data.status)) throw Error("Неизвестное состояние риска.");
+    if (data.status !== "active" && !data.reason.trim()) throw Error("Для завершения укажите причину.");
+    if (data.link && !/^https?:\/\/[^\s]+$/i.test(data.link)) throw Error("Ссылка должна начинаться с http:// или https://.");
+  }
+  function initial(today) {
+    const seeds = [
+      ["Опоздание уведомлений об инциденте",8,7,"anna","active","2026-01-31","Очередь уведомлений перегружена","Уведомление придёт после восстановления сервиса","Команда клиента пропустит инцидент и потеряет доверие к мониторингу"],
+      ["Недоступность истории проверок",1,9,"ivan","active",today,"Единственная копия хранилища","История проверок будет потеряна","Клиенты не смогут подтвердить соблюдение SLA"],
+      ["Ошибки при подключении первого сайта",5,5,"ivan","active",today,"Непонятная инструкция настройки","Пользователь не завершит подключение","Снизится активация новых команд"],
+      ["Неточность описания тарифов",2,3,"anna","active",today,"Устаревший текст страницы","Клиент неверно поймёт ограничения","Появятся обращения в поддержку"],
+      ["Сбой оплаты подписки",5,8,"anna","withdrawn",today,"Устаревшая интеграция","Платёж не пройдёт","Пользователь потеряет доступ к платным функциям"],
+      ["Потеря отчёта за месяц",3,7,"ivan","realized",today,"Сбой генерации отчётов","Отчёт не будет доставлен","Клиент не получит данные для внутреннего аудита"]
+    ];
+    return {nextId:7,risks:seeds.map((s,i) => {const data={...blank(s[3]),title:s[0],probability:s[1],impact:s[2],status:s[4],cause:s[6],event:s[7],consequence:s[8],reason:s[4] === "active" ? "" : "Событие разобрано, решение зафиксировано командой."};return {id:"r"+(i+1),published:data,reviewedAt:s[5],history:[{data:copy(data),date:s[5],actor:"maria",kind:"Публикация"}],proposal:null};})};
+  }
+  function transition(state,action) {
+    const next = copy(state);
+    if (!person(action.actor)) throw Error("Неизвестный участник.");
+    const actor=action.actor;
+    let risk=next.risks.find(r => r.id === action.id);
+    if (action.type === "create") {
+      const id="r"+next.nextId++;
+      next.risks.push({id,published:null,history:[],reviewedAt:null,proposal:{author:actor,status:"draft",data:blank(actor),comment:""}});
+      return {state:next,id,message:"Черновик создан. Заполнить всё можно позже."};
+    }
+    if (!risk) throw Error("Риск не найден.");
+    const reviewer=!!person(actor).reviewer;
+    if (action.type === "propose") {
+      if (!risk.published || risk.published.status !== "active") throw Error("Изменения доступны для активного опубликованного риска.");
+      if (risk.proposal) throw Error("У риска уже есть незавершённая правка. Вторая правка запрещена.");
+      risk.proposal={author:actor,status:"draft",data:copy(risk.published),comment:""};
+    } else if (action.type === "save" || action.type === "submit") {
+      const p=risk.proposal;
+      if (!p || p.author !== actor || !["draft","returned"].includes(p.status)) throw Error("Редактировать и отправлять может только автор черновика или возвращённого предложения.");
+      if (action.data) {
+        for (const key of Object.keys(blank(actor))) if (Object.hasOwn(action.data,key)) p.data[key]=action.data[key];
+      }
+      if (action.type === "submit") {validate(p.data);p.status="submitted";}
+    } else if (action.type === "approve" || action.type === "return") {
+      if (!reviewer) throw Error("Это действие доступно только ревьюеру.");
+      const p=risk.proposal;
+      if (!p || p.status !== "submitted") throw Error("Сначала отправьте предложение на ревью.");
+      if (action.type === "return") {
+        if (!action.comment?.trim()) throw Error("Укажите обязательное пояснение возврата.");
+        p.status="returned";p.comment=action.comment.trim();
+      } else {
+        validate(p.data);
+        const kind=!risk.published ? "Публикация" : p.data.status !== "active" ? "Завершение" : "Пересмотр с изменениями";
+        risk.published=copy(p.data);risk.reviewedAt=action.today;
+        risk.history.push({data:copy(p.data),date:action.today,actor,kind});risk.proposal=null;
+      }
+    } else if (action.type === "confirm") {
+      if (!reviewer) throw Error("Подтвердить оценку может только ревьюер.");
+      if (!risk.published || risk.published.status !== "active") throw Error("Пересмотр доступен только активному опубликованному риску.");
+      risk.reviewedAt=action.today;
+      risk.history.push({data:copy(risk.published),date:action.today,actor,kind:"Оценка подтверждена без изменений"});
+    } else throw Error("Неизвестное действие.");
+    const messages={propose:"Создана правка. До одобрения действует опубликованная версия.",save:"Черновик сохранён в памяти.",submit:"Предложение отправлено на ревью.",approve:"Предложение утверждено. Опубликована новая версия.",return:"Предложение возвращено автору с пояснением.",confirm:"Прежняя оценка подтверждена. Дата пересмотра обновлена."};
+    return {state:next,id:risk.id,message:messages[action.type]};
+  }
+  return {people,person,category,assessment,dueDate,overdue,canSee,blank,validate,initial,transition};
+})();
+</script>
+<script id="risk-ui">
+"use strict";
+const M=RiskModel;
+const today=(()=>{const d=new Date();return [d.getFullYear(),String(d.getMonth()+1).padStart(2,"0"),String(d.getDate()).padStart(2,"0")].join("-");})();
+let state=M.initial(today),actor="anna",tab="active",selected="r1",scenario=-1,step=0,scenarioRisk=null;
+const $=id=>document.getElementById(id);
+const esc=value=>String(value??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const names=id=>M.person(id)?.name||"—";
+const statusName={active:"Активен",withdrawn:"Снят",realized:"Реализовался"};
+const proposalName={draft:"Черновик",submitted:"На ревью",returned:"Возвращено автору"};
+const date=value=>value ? value.split("-").reverse().join(".") : "—";
+function options(value,all=false){return (all?'<option value="">Все владельцы</option>':"")+M.people.map(p=>`<option value="${p.id}" ${value===p.id?"selected":""}>${esc(p.name)}</option>`).join("");}
+$("participant").innerHTML=M.people.map(p=>`<option value="${p.id}">${p.name} · ${p.reviewer?"ревьюер":"участник"}</option>`).join("");
+$("owner-filter").innerHTML=options("",true);
+function feedback(message,error=false){$("feedback").className="notice"+(error?" error":"");$("feedback").textContent=message;}
+function dispatch(type,data={}) {
+  try {const result=M.transition(state,{type,id:selected,actor,today,...data});state=result.state;selected=result.id;render();feedback(result.message);return true;}
+  catch(error){render();feedback(error.message,true);return false;}
+}
+function badge(data){const a=M.assessment(data);return a?`<span class="badge ${a.key}">${a.score} · ${a.label}</span>${a.critical?'<div class="critical">Критические последствия</div>':""}`:'<span class="badge neutral">Нет оценки</span>';}
+function description(data){return `<dl>${[["Название",data.title||"Без названия"],["Состояние",statusName[data.status]],["Причина",data.cause],["Возможное событие",data.event],["Последствия для продукта",data.consequence],["Владелец",names(data.owner)],["Вероятность · следующие 3 месяца",data.probability ? data.probability+" / 10":"—"],["Влияние",data.impact ? data.impact+" / 10":"—"],["Решение и меры",data.notes||"Не указаны"],["Внешний трекер",data.link||"Не указан"],["Причина завершения",data.reason||"—"]].map(([k,v])=>`<dt>${k}</dt><dd>${esc(v)}</dd>`).join("")}</dl>${badge(data)}`;}
+function renderList(){
+  const labels={active:"Активные риски",mine:"Мои предложения",review:"На ревью",archive:"Архив"};
+  $("list-title").textContent=labels[tab];
+  const query=$("search").value.trim().toLocaleLowerCase("ru"),owner=$("owner-filter").value,category=$("category-filter").value;
+  let rows=state.risks.flatMap(r=>{
+    let data;
+    if(tab==="active" && r.published?.status==="active") data=r.published;
+    if(tab==="archive" && r.published && r.published.status!=="active") data=r.published;
+    if(tab==="mine" && r.proposal?.author===actor) data=r.proposal.data;
+    if(tab==="review" && M.person(actor).reviewer && r.proposal?.status==="submitted") data=r.proposal.data;
+    if(!data) return [];
+    const text=[data.title,data.cause,data.event,data.consequence,data.notes].join(" ").toLocaleLowerCase("ru");
+    if(query&&!text.includes(query)||owner&&data.owner!==owner||category&&M.assessment(data)?.key!==category) return [];
+    return [{r,data}];
+  }).sort((a,b)=>(M.assessment(b.data)?.score||0)-(M.assessment(a.data)?.score||0)||a.data.title.localeCompare(b.data.title,"ru"));
+  $("list").innerHTML=rows.length?`<table><thead><tr><th>Риск / владелец</th><th>Вероятн.</th><th>Влияние</th><th>Приоритет / категория</th><th>Пересмотр</th></tr></thead><tbody>${rows.map(({r,data})=>`<tr class="${selected===r.id?"selected":""}"><td><button data-open="${r.id}">${esc(data.title||"Без названия")}</button><div>${esc(names(data.owner))}</div>${r.proposal?`<span class="badge neutral">${tab==="mine"||tab==="review"?proposalName[r.proposal.status]:"Есть незавершённая правка"}</span>`:""}${data.status!=="active"?`<div>${statusName[data.status]}</div>`:""}</td><td>${esc(data.probability||"—")}</td><td>${esc(data.impact||"—")}</td><td>${badge(data)}</td><td>${date(r.reviewedAt)}${r.published?.status==="active"&&M.overdue(r.reviewedAt,today)?'<div class="critical">Требует пересмотра</div>':""}</td></tr>`).join("")}</tbody></table>`:'<p class="empty">Здесь пока нет рисков. Измените фильтры или создайте предложение.</p>';
+}
+function renderCard(){
+  const r=state.risks.find(r=>r.id===selected),p=r?.proposal;
+  if(!r||(!r.published&&(!p||!M.canSee(p,actor)))){$("card").innerHTML='<h2>Карточка риска</h2><p class="muted">Выберите доступный риск в таблице.</p>';return;}
+  let html=`<div class="eyebrow">${r.id.toUpperCase()}</div><h2>${esc(r.published?.title||p?.data.title||"Новый риск")}</h2>`;
+  if(r.published){html+=`<h3>Опубликованная версия · ${statusName[r.published.status]}</h3>${description(r.published)}<p class="muted">Пересмотр: ${date(r.reviewedAt)} · следующий: ${date(M.dueDate(r.reviewedAt))}</p>`;
+    if(r.published.status==="active") html+=`<div class="bar"><button data-action="propose">Предложить изменение / завершение</button><button data-action="confirm">Подтвердить прежнюю оценку</button></div><small>Подтверждение доступно ревьюеру. Нажатие без роли покажет причину отказа.</small>`;
+  }
+  if(p){html+='<div class="notice">Есть незавершённая правка. Опубликованная версия действует до одобрения.</div>';
+    if(M.canSee(p,actor)){
+      html+=`<h3>Предложение · ${proposalName[p.status]}</h3><p class="muted">Автор: ${esc(names(p.author))}</p>${p.comment?`<div class="notice">Пояснение ревьюера: ${esc(p.comment)}</div>`:""}`;
+      const editable=p.author===actor&&p.status!=="submitted";
+      if(editable) html+=form(p.data);else html+=description(p.data);
+      if(p.status==="submitted") html+=`<label for="return-comment">Пояснение возврата (обязательно при возврате)</label><textarea id="return-comment"></textarea><div class="bar"><button class="primary" data-action="approve">Утвердить предложение</button><button data-action="return">Вернуть автору</button></div><small>Решение принимает ревьюер. Саморевью разрешено.</small>`;
+    }else html+='<p class="muted">Содержание предложения доступно его автору и ревьюерам после отправки. Черновик виден только автору.</p>';
+  }
+  html+=`<h3>История утверждённых версий (${r.history.length})</h3>${r.history.slice().reverse().map((h,i)=>`<details class="history"><summary>Версия ${r.history.length-i} · ${esc(h.kind)} · ${date(h.date)}</summary><p class="muted">Утвердил(а): ${esc(names(h.actor))}</p>${description(h.data)}</details>`).join("")||'<p class="muted">Утверждённых версий пока нет.</p>'}`;
+  $("card").innerHTML=html;
+}
+function form(d){return `<form id="proposal-form" novalidate><p class="muted">Для ревью обязательны название, причина, событие, последствия, владелец и обе оценки. Черновик можно сохранить незаполненным.</p>${[["title","Название риска","input"],["cause","Причина","textarea"],["event","Возможное событие","textarea"],["consequence","Последствия для продукта","textarea"]].map(([key,label,tag])=>`<label for="field-${key}">${label}</label><${tag} id="field-${key}" name="${key}" ${tag==="input"?`value="${esc(d[key])}">`:`>${esc(d[key])}</textarea>`}`).join("")}<label for="field-owner">Владелец</label><select id="field-owner" name="owner">${options(d.owner)}</select><div class="two">${[["probability","Вероятность"],["impact","Влияние"]].map(([key,label])=>`<div><label for="field-${key}">${label} · 1–10</label><input id="field-${key}" name="${key}" type="number" min="1" max="10" step="1" value="${esc(d[key])}"></div>`).join("")}</div><p><small>Вероятность на следующие 3 месяца: 1 ≈ 10%, 5 ≈ 50%, 10 ≈ 100%. Влияние: 1 — единичное неудобство; 3 — ограниченное ухудшение; 5 — существенное ухудшение ключевого сценария; 7 — его недоступность для многих; 10 — угроза жизнеспособности продукта.</small></p><p><small>Оценивайте текущее состояние с действующими защитными мерами. Запланированные меры ещё не уменьшают оценку.</small></p><output id="live-score">${badge(d)}</output><label for="field-notes">Решение и меры · необязательно</label><textarea id="field-notes" name="notes">${esc(d.notes)}</textarea><label for="field-link">Ссылка на внешний трекер · необязательно</label><input id="field-link" name="link" type="url" value="${esc(d.link)}"><label for="field-status">Предлагаемое состояние</label><select id="field-status" name="status">${Object.entries(statusName).map(([key,label])=>`<option value="${key}" ${d.status===key?"selected":""}>${label}</option>`).join("")}</select><label for="field-reason">Причина завершения · обязательна для «Снят» / «Реализовался»</label><textarea id="field-reason" name="reason">${esc(d.reason)}</textarea><div class="bar"><button type="button" data-action="save">Сохранить черновик</button><button type="button" class="primary" data-action="submit">Отправить на ревью</button></div></form>`;}
+function formData(){const f=$("proposal-form");if(!f)return undefined;const d=Object.fromEntries(new FormData(f));for(const k of ["probability","impact"])d[k]=d[k]===""?"":Number(d[k]);return d;}
+function render(){
+  $("participant").value=actor;
+  if(tab==="review"&&!M.person(actor).reviewer)tab="active";
+  $("tabs").innerHTML=[["active","Активные"],["mine","Мои предложения"],...(M.person(actor).reviewer?[["review","На ревью"]]:[]),["archive","Архив"]].map(([key,label])=>`<button data-tab="${key}" aria-pressed="${tab===key}">${label}</button>`).join("");
+  renderList();renderCard();renderGuide();
+}
+$("participant").onchange=e=>{actor=e.target.value;render();feedback("Участник изменён. Показаны доступные ему данные. Несохранённые поля не переносятся.");};
+$("create").onclick=()=>{tab="mine";dispatch("create");};
+$("reset").onclick=()=>{state=M.initial(today);actor="anna";selected="r1";tab="active";scenario=-1;step=0;$("search").value="";$("owner-filter").value="";$("category-filter").value="";render();feedback("Демонстрационные данные восстановлены.");};
+for(const id of ["search","owner-filter","category-filter"])$(id).addEventListener(id==="search"?"input":"change",renderList);
+document.addEventListener("submit",e=>e.preventDefault());
+document.addEventListener("input",e=>{if(e.target.closest("#proposal-form")&&$("live-score"))$("live-score").innerHTML=badge(formData());});
+document.addEventListener("click",e=>{
+  const b=e.target.closest("button");if(!b)return;
+  if(b.dataset.open){selected=b.dataset.open;renderCard();}
+  if(b.dataset.tab){tab=b.dataset.tab;render();}
+  if(b.dataset.action){const action=b.dataset.action;dispatch(action,{data:["save","submit"].includes(action)?formData():undefined,comment:$("return-comment")?.value});}
+  if(b.dataset.scenario!==undefined)startScenario(Number(b.dataset.scenario));
+  if(b.dataset.step!==undefined)runStep();
+});
+const example={...M.blank("anna"),title:"Задержка первого отчёта",cause:"Расчёт отчётов зависит от одной очереди",event:"Первый отчёт придёт на сутки позже",consequence:"Новая команда не увидит ценности продукта",probability:5,impact:6};
+const switchTo=id=>{actor=id;};
+const act=(type,extra={})=>dispatch(type,extra);
+const scenarios=[
+  {name:"1. Публикация",intro:"Сохраните неполный черновик, затем заполните его и пройдите ревью.",steps:[
+    ["Создать пустой черновик",()=>{tab="mine";act("create");scenarioRisk=selected;}],
+    ["Сохранить только название",()=>act("save",{data:{title:example.title}})],
+    ["Заполнить и отправить",()=>act("submit",{data:example})],
+    ["Мария: утвердить",()=>{switchTo("maria");tab="active";act("approve");}]]},
+  {name:"2. Возврат",intro:"Ревьюер возвращает предложение с пояснением. Автор исправляет его и отправляет повторно.",steps:[
+    ["Анна: отправить предложение",()=>{act("create");scenarioRisk=selected;tab="mine";act("submit",{data:example});}],
+    ["Мария: вернуть с пояснением",()=>{switchTo("maria");tab="review";act("return",{comment:"Уточните, как задержка повлияет на активацию новых команд."});}],
+    ["Анна: исправить и отправить",()=>{switchTo("anna");tab="mine";act("submit",{data:{consequence:"Команда не завершит активацию и откажется от пробного периода"}});}],
+    ["Олег: утвердить",()=>{switchTo("oleg");tab="active";act("approve");}]]},
+  {name:"3. Изменение",intro:"Сравните опубликованную версию и предложение. Старые оценки действуют до утверждения.",steps:[
+    ["Иван: предложить правку",()=>{switchTo("ivan");act("propose");}],
+    ["Отправить новую оценку 3 × 7",()=>act("submit",{data:{probability:3,impact:7,notes:"Резервная очередь уже запущена"}})],
+    ["Анна: увидеть прежнюю версию",()=>{switchTo("anna");feedback("Команда видит прежнюю оценку 8 × 7 = 56 и наличие правки; содержание предложения скрыто.");}],
+    ["Мария: утвердить изменения",()=>{switchTo("maria");act("approve");}]]},
+  {name:"4. Пересмотр",intro:"Подтвердите прежнюю оценку просроченного риска. Проверьте новую дату и запись в истории.",steps:[
+    ["Мария: подтвердить прежнюю оценку",()=>{switchTo("maria");act("confirm");}]]},
+  {name:"5. Завершение",intro:"Завершение — предложение с причиной. До ревью риск остаётся активным.",steps:[
+    ["Анна: предложить завершение",()=>act("propose")],
+    ["Отправить: Снят, с причиной",()=>act("submit",{data:{status:"withdrawn",reason:"Новый канал доставки запущен, причина риска устранена."}})],
+    ["Олег: утвердить завершение",()=>{switchTo("oleg");act("approve");}],
+    ["Открыть архив",()=>{tab="archive";feedback("Риск в архиве. Причина завершения и прежние версии сохранены.");}]]},
+  {name:"6. Ограничения",intro:"Попробуйте действие без роли и создание второй незавершённой правки. Ожидаются отказы без изменения данных.",steps:[
+    ["Анна: подтвердить без роли",()=>act("confirm")],
+    ["Анна: создать первую правку",()=>act("propose")],
+    ["Иван: попытаться создать вторую",()=>{switchTo("ivan");act("propose");}],
+    ["Мария: проверить приватность черновика",()=>{switchTo("maria");feedback("Даже ревьюер не видит содержание чужого черновика до отправки. Вторая правка не создана.");}]]}
+];
+function startScenario(index){scenario=index;step=0;state=M.initial(today);actor="anna";selected="r1";scenarioRisk=null;tab="active";$("search").value="";$("owner-filter").value="";$("category-filter").value="";render();feedback("Сценарий начат с исходных данных. Нажимайте шаги по порядку.");}
+function runStep(){const current=scenarios[scenario];if(!current||step>=current.steps.length)return;current.steps[step][1]();step++;render();}
+function renderGuide(){
+  $("scenarios").innerHTML=`<button data-scenario="-1" aria-pressed="${scenario===-1}">Свободный режим</button>`+scenarios.map((s,i)=>`<button data-scenario="${i}" aria-pressed="${scenario===i}">${s.name}</button>`).join("");
+  if(scenario<0){$("walkthrough").innerHTML='<p class="muted">Меняйте участников, создавайте предложения, проверяйте переходы в любом порядке. Новый сценарий восстановит исходные данные.</p>';return;}
+  const s=scenarios[scenario];$("walkthrough").innerHTML=`<p>${s.intro}</p><div class="scenario-steps">${s.steps.map(([label],i)=>`<button data-step="${i}" ${i!==step?"disabled":""}>${i<step?"✓":i+1}. ${label}</button>`).join("")}</div><p class="muted">${step===s.steps.length?"Сценарий завершён. Изучите карточку и историю или продолжайте в свободном режиме.":`Шаг ${step+1} из ${s.steps.length}. Результат каждого действия появится ниже.`}</p>`;
+}
+render();
+</script>
+</body>
+</html>
