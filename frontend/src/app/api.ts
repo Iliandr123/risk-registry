@@ -1,68 +1,28 @@
-export type Participant = { id: string; displayName: string };
-export type Account = Participant & {
-  login: string;
-  active: boolean;
-  isAdmin: boolean;
-  isReviewer: boolean;
-  mustChangePassword: boolean;
-};
-export type AccountSettings = Pick<Account, "active" | "isAdmin" | "isReviewer">;
-export type TemporaryPassword = { account: Account; temporaryPassword: string };
+import type { components, operations } from "./api.generated";
 
-export type Category = "LOW" | "MEDIUM" | "HIGH";
-export type RiskState = "ACTIVE" | "REMOVED" | "MATERIALIZED";
-export type ProposalStatus = "DRAFT" | "IN_REVIEW" | "RETURNED" | "APPROVED" | "WITHDRAWN" | "CLOSED";
-export type DraftAction = "submit" | "return" | "approve" | "withdraw" | "unblock";
+type Schemas = components["schemas"];
+type Body<Operation extends keyof operations> =
+  NonNullable<operations[Operation]["requestBody"]> extends { content: { "application/json": infer Json } }
+    ? Json
+    : never;
 
-export type Fields = {
-  title: string | null;
-  cause: string | null;
-  possibleEvent: string | null;
-  productConsequences: string | null;
-  ownerId: string | null;
-  likelihood: number | null;
-  impact: number | null;
-  decisionNote: string | null;
-  trackerUrl: string | null;
-  riskState: RiskState;
-  closureReason: string | null;
-};
-
-type Version = { versionId: string; revision: number };
-export type Identity = Version & { riskId: string; status: ProposalStatus };
-export type Proposal = Identity & { kind: "FIRST" | "EDIT"; author: Participant; fields: Fields };
-export type Priority = { score: number; category: Category; criticalImpact: boolean };
-export type Owner = Participant & { active: boolean };
-type Snapshot = Omit<Fields, "ownerId"> & {
-  versionId: string;
-  title: string;
-  owner: Owner;
-  likelihood: number;
-  impact: number;
-  priority: Priority;
-};
-export type Assessment = { date: string; reviewDueDate: string; reviewRequired: boolean };
-export type PublishedRisk = {
-  riskId: string;
-  snapshot: Snapshot;
-  assessment: Assessment;
-  hasOpenDraft: boolean;
-  unblock?: Version & { authorDisplayName: string };
-};
-export type RiskSummary = Pick<Snapshot, "title" | "owner" | "likelihood" | "impact" | "priority" | "riskState">
-  & Pick<PublishedRisk, "riskId" | "assessment" | "hasOpenDraft"> & { publishedVersionId: string };
-export type RiskHistory = {
-  publishedVersions: Snapshot[];
-  events: {
-    versionId: string;
-    actor: Participant;
-    action: "SUBMIT" | "RETURN" | "APPROVE" | "WITHDRAW" | "UNBLOCK" | "CONFIRM_ASSESSMENT";
-    occurredAt: string;
-    comment?: string | null;
-  }[];
-};
-export type RiskList = { view: "active" | "archive"; items: RiskSummary[] }
-  | { view: "mine" | "review"; items: Proposal[] };
+export type Participant = Schemas["Participant"];
+export type Account = Schemas["Account"];
+export type AccountSettings = Required<Body<"updateAccount">>;
+export type TemporaryPassword = Schemas["TemporaryPasswordResult"];
+export type Category = Schemas["Category"];
+export type RiskState = Schemas["RiskState"];
+export type ProposalStatus = Schemas["ProposalStatus"];
+export type DraftAction = operations["actOnRiskDraft"]["parameters"]["path"]["action"];
+export type Fields = Schemas["ProposalFields"];
+export type Identity = Schemas["DraftActionResult"];
+export type Proposal = Schemas["Proposal"];
+export type Priority = Schemas["Priority"];
+export type Owner = Schemas["Owner"];
+export type PublishedRisk = Schemas["PublishedRisk"];
+export type RiskHistory = Schemas["RiskHistory"];
+export type RiskList = operations["listRisks"]["responses"][200]["content"]["application/json"];
+type Version = Pick<Identity, "versionId" | "revision">;
 
 export class ApiError extends Error {
   constructor(
@@ -87,15 +47,15 @@ export async function ifVisible<T>(operation: Promise<T>): Promise<T | null> {
   }
 }
 
-export function createApi(onSessionEnded: () => void) {
+export function createApi(onSessionEnded: () => void, transport: (path: string, init: RequestInit) => Promise<Response> = fetch) {
   async function request<T>(path: string, method = "GET", body?: object, signal?: AbortSignal): Promise<T> {
     const headers = new Headers({ Accept: "application/json" });
     if (method !== "GET") {
-      const { token } = await request<{ token: string }>("/csrf");
+      const { token } = await request<Schemas["CsrfToken"]>("/csrf");
       headers.set("X-CSRF-Token", token);
     }
     if (body) headers.set("Content-Type", "application/json");
-    const response = await fetch(`/api${path}`, {
+    const response = await transport(`/api${path}`, {
       method, headers, body: body && JSON.stringify(body), signal, cache: "no-store",
     });
     if (!response.ok) {
@@ -108,15 +68,15 @@ export function createApi(onSessionEnded: () => void) {
     return response.status === 204 ? undefined as T : response.json();
   }
 
-  const riskPath = (id: string) => `/risks/${id}`;
+  const riskPath = (id: string) => `/risks/${encodeURIComponent(id)}`;
   return {
     profile: (signal?: AbortSignal) => request<Account>("/me", "GET", undefined, signal),
-    signIn: (login: string, password: string) => request<Account>("/session", "POST", { login, password }),
+    signIn: (login: string, password: string) => request<Account>("/session", "POST", { login, password } satisfies Body<"createSession">),
     signOut: () => request<void>("/session", "DELETE"),
     changePassword: (currentPassword: string, newPassword: string) =>
-      request<void>("/me/password", "POST", { currentPassword, newPassword }),
+      request<void>("/me/password", "POST", { currentPassword, newPassword } satisfies Body<"changePassword">),
     accounts: () => request<Account[]>("/admin/accounts"),
-    createAccount: (fields: Pick<Account, "login" | "displayName" | "isAdmin" | "isReviewer">) =>
+    createAccount: (fields: Body<"createAccount">) =>
       request<TemporaryPassword>("/admin/accounts", "POST", fields),
     updateAccount: (id: string, settings: AccountSettings) =>
       request<Account>(`/admin/accounts/${id}`, "PATCH", settings),
@@ -129,13 +89,13 @@ export function createApi(onSessionEnded: () => void) {
     draft: (id: string) => request<Proposal>(`${riskPath(id)}/draft`),
     createRisk: () => request<Proposal>("/risks", "POST", {}),
     openDraft: (id: string, expectedPublishedVersionId: string) =>
-      request<Proposal>(`${riskPath(id)}/draft`, "POST", { expectedPublishedVersionId }),
+      request<Proposal>(`${riskPath(id)}/draft`, "POST", { expectedPublishedVersionId } satisfies Body<"openRiskDraft">),
     saveDraft: ({ riskId, versionId, revision }: Proposal, fields: Fields) =>
-      request<Proposal>(`${riskPath(riskId)}/draft`, "PATCH", { versionId, expectedRevision: revision, fields }),
+      request<Proposal>(`${riskPath(riskId)}/draft`, "PATCH", { versionId, expectedRevision: revision, fields } satisfies Body<"saveRiskDraft">),
     act: (id: string, { versionId, revision }: Version, action: DraftAction, comment?: string) =>
-      request<Identity>(`${riskPath(id)}/draft/${action}`, "POST", { versionId, expectedRevision: revision, comment }),
+      request<Identity>(`${riskPath(id)}/draft/${action}`, "POST", { versionId, expectedRevision: revision, comment } satisfies Body<"actOnRiskDraft">),
     confirm: (id: string, expectedPublishedVersionId: string) =>
-      request<PublishedRisk>(`${riskPath(id)}/assessment/confirm`, "POST", { expectedPublishedVersionId }),
+      request<PublishedRisk>(`${riskPath(id)}/assessment/confirm`, "POST", { expectedPublishedVersionId } satisfies Body<"confirmRiskAssessment">),
   };
 }
 

@@ -1,12 +1,12 @@
 import { useEffect, useState, type FormEvent } from "react";
 import {
-  ApiError, errorMessage, ifVisible, type Account, type Api, type DraftAction, type Participant,
+  ApiError, errorMessage, type Account, type Api, type DraftAction, type Participant,
   type Proposal, type PublishedRisk, type RiskHistory,
 } from "./api";
 import { dateLabel, FieldDetails, FieldEditor, OwnerName, proposalStatuses } from "./risk-fields";
 
-export type Selection = { riskId: string; proposal?: Proposal };
-type Card = { published: PublishedRisk | null; draft: Proposal | null; history: RiskHistory | null };
+import { readCard, type Card, type Selection } from "./read-card";
+
 type Update = (selection: Selection, message: string, refreshCard?: boolean) => void;
 
 const events: Record<RiskHistory["events"][number]["action"], string> = {
@@ -18,12 +18,12 @@ const actionMessages: Record<DraftAction, string> = {
   approve: "Версия утверждена.", withdraw: "Предложение отозвано.", unblock: "Предложение закрыто.",
 };
 const terminal = (proposal: Proposal) => ["APPROVED", "WITHDRAWN", "CLOSED"].includes(proposal.status);
-const eventDate = new Intl.DateTimeFormat("ru-RU", { dateStyle: "medium", timeStyle: "short" });
+const eventDate = new Intl.DateTimeFormat("ru-RU", { dateStyle: "medium", timeStyle: "long", timeZone: "UTC" });
 
-export function RiskCard({ api, selection, account, participants, onUpdate }: {
-  api: Api; selection: Selection; account: Account; participants: Participant[]; onUpdate: Update;
+export function RiskCard({ api, selection, account, participants, onUpdate, initial }: {
+  api: Api; selection: Selection; account: Account; participants: Participant[]; onUpdate: Update; initial?: Card;
 }) {
-  const [card, setCard] = useState<Card | null>(null);
+  const [card, setCard] = useState<Card | null>(initial ?? null);
   const [error, setError] = useState("");
   const [loadingError, setLoadingError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -31,21 +31,13 @@ export function RiskCard({ api, selection, account, participants, onUpdate }: {
   const { riskId, proposal } = selection;
 
   useEffect(() => {
+    if (initial) return;
     let cancelled = false;
-    async function load() {
-      const [published, current, history] = await Promise.all([
-        ifVisible(api.risk(riskId)), ifVisible(api.draft(riskId)), ifVisible(api.history(riskId)),
-      ]);
-      let draft = !proposal || current?.versionId === proposal.versionId ? current : null;
-      if (!draft && proposal?.author.id === account.id && history) {
-        const mine = await api.risks(new URLSearchParams({ view: "mine" }));
-        if (mine.view === "mine") draft = mine.items.find((item) => item.versionId === proposal.versionId) ?? null;
-      }
-      if (!cancelled) setCard({ published, draft, history });
-    }
-    load().catch((error) => { if (!cancelled) setLoadingError(errorMessage(error)); });
+    readCard(api, selection, account.id)
+      .then((data) => { if (!cancelled) setCard(data); })
+      .catch((error) => { if (!cancelled) setLoadingError(errorMessage(error)); });
     return () => { cancelled = true; };
-  }, [api, riskId, proposal, account.id]);
+  }, [api, selection, initial, account.id]);
 
   async function run(operation: () => Promise<void>) {
     setBusy(true);

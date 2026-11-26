@@ -60,9 +60,9 @@ p { line-height: 1.48; }
 .sidebar { position: sticky; top: 0; height: 100dvh; display: flex; flex-direction: column; gap: 2rem; padding: 1.6rem 1rem; background: var(--sidebar); color: #f4faf9; }
 .sidebar .brand { margin-inline: .3rem; }
 .sidebar nav { display: grid; gap: .25rem; }
-.nav-link { display: flex; align-items: center; text-align: left; gap: .65rem; border-color: transparent; background: transparent; color: #dce9e9; font-size: .9rem; }
+.nav-link { display: flex; align-items: center; text-align: left; gap: .65rem; padding: .55rem .8rem; border-radius: .45rem; text-decoration: none; color: #dce9e9; font-size: .9rem; }
 .nav-link span { width: 1.15rem; text-align: center; font-size: 1rem; }
-.nav-link.selected, .sidebar button:hover:not(:disabled) { background: #29454d; color: white; }
+.nav-link.selected, .nav-link:hover, .sidebar button:hover:not(:disabled) { background: #29454d; color: white; }
 .nav-link.selected { box-shadow: inset 3px 0 #79cfba; }
 .profile { margin-top: auto; display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: .5rem .65rem; overflow-wrap: anywhere; }
 .profile small { display: block; color: #b8cdd0; }

@@ -1,0 +1,48 @@
+services:
+  db:
+    image: postgres:17
+    environment:
+      POSTGRES_DB: risk_register
+      POSTGRES_USER: risk_register
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+    volumes:
+      - postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-h", "127.0.0.1", "-U", "risk_register", "-d", "risk_register"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+  backend:
+    build:
+      context: backend
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://db:5432/risk_register
+      SPRING_DATASOURCE_USERNAME: risk_register
+      SPRING_DATASOURCE_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+      RISK_REGISTER_TEAM_TIME_ZONE: ${RISK_REGISTER_TEAM_TIME_ZONE:-UTC}
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/8080"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+  frontend:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+    environment:
+      RISK_API_ORIGIN: http://backend:8080
+    ports:
+      - "127.0.0.1:${PILOT_PORT:-3000}:3000"
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/api/csrf').then(r => { if (!r.ok) process.exitCode = 1 }).catch(() => { process.exitCode = 1 })"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+volumes:
+  postgres:

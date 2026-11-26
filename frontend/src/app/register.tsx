@@ -1,18 +1,26 @@
-import { useEffect, useState, type FormEvent } from "react";
-import { errorMessage, type Account, type Api, type Owner, type Participant, type Proposal, type RiskList } from "./api";
-import { RiskCard, type Selection } from "./risk-card";
+import { useEffect, useState } from "react";
+import { errorMessage, type Account, type Api, type Owner, type Participant, type RiskList } from "./api";
+import { RiskCard } from "./risk-card";
+import type { Card, Selection } from "./read-card";
+import { registerUrl, type RegisterView } from "./navigation";
 import { categories, dateLabel, OwnerName, PriorityBadge, proposalStatuses, riskStates } from "./risk-fields";
 
-export type RegisterView = RiskList["view"];
-const emptyFilters = { q: "", ownerId: "", category: "" };
+export type InitialRegister = {
+  list: RiskList;
+  participants: Participant[];
+  filters: Record<string, string>;
+  selection?: Selection;
+  card?: Card;
+};
 
-export function Register({ api, account, view, onViewChange, label }: {
+export function Register({ api, account, view, onViewChange, label, initial }: {
   api: Api; account: Account; view: RegisterView; onViewChange: (view: RegisterView) => void; label: string;
+  initial: InitialRegister;
 }) {
-  const [filters, setFilters] = useState(emptyFilters);
-  const [selection, setSelection] = useState<Selection | null>(null);
-  const [participants, setParticipants] = useState<Participant[]>([]);
-  const [list, setList] = useState<RiskList | null>(null);
+  const filters = initial.filters;
+  const [selection, setSelection] = useState<Selection | null>(initial.selection ?? null);
+  const [participants, setParticipants] = useState(initial.participants);
+  const [list, setList] = useState(initial.list);
   const [knownOwners, setKnownOwners] = useState<Map<string, Owner>>(new Map());
   const [error, setError] = useState("");
   const [listError, setListError] = useState("");
@@ -23,6 +31,7 @@ export function Register({ api, account, view, onViewChange, label }: {
   const publishedView = view === "active" || view === "archive";
 
   useEffect(() => {
+    if (period === 0) return;
     let cancelled = false;
     api.participants().then((items) => { if (!cancelled) setParticipants(items); })
       .catch((error) => { if (!cancelled) setError(errorMessage(error)); });
@@ -30,9 +39,9 @@ export function Register({ api, account, view, onViewChange, label }: {
   }, [api, period]);
 
   useEffect(() => {
+    if (period === 0) return;
     const controller = new AbortController();
-    const query = new URLSearchParams({ view });
-    if (publishedView) Object.entries(filters).forEach(([key, value]) => { if (value) query.set(key, value); });
+    const query = registerUrl(view, filters);
     api.risks(query, controller.signal).then((data) => {
       if (!controller.signal.aborted) {
         setList(data);
@@ -46,7 +55,7 @@ export function Register({ api, account, view, onViewChange, label }: {
       if (!controller.signal.aborted) setListError(errorMessage(error));
     });
     return () => controller.abort();
-  }, [api, view, publishedView, filters, period]);
+  }, [api, view, filters, period]);
 
   async function createRisk() {
     setError("");
@@ -71,24 +80,24 @@ export function Register({ api, account, view, onViewChange, label }: {
     if (refreshCard) setCardPeriod((previous) => previous + 1);
   }
 
-  function editFilters(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    const data = new FormData(event.currentTarget);
-    setList(null);
-    setListError("");
-    setFilters({ q: String(data.get("q")).trim(), ownerId: String(data.get("ownerId")), category: String(data.get("category")) });
+  function riskLink(riskId?: string, versionId?: string) {
+    const query = registerUrl(view, filters);
+    if (riskId) query.set("risk", riskId);
+    if (versionId) query.set("version", versionId);
+    return `/?${query}`;
   }
 
-  function openProposal(proposal: Proposal) {
-    setMessage("");
-    setSelection({ riskId: proposal.riskId, proposal });
-  }
-
-  const currentList = list?.view === view ? list : null;
+  const currentList = list.view === view ? list : null;
   const owners = new Map(Array.from(knownOwners, ([id, owner]) => [
     id, owner.displayName + (owner.active ? "" : " (Отключён)"),
   ]));
+  if (currentList?.view === "active" || currentList?.view === "archive") {
+    for (const { owner } of currentList.items) {
+      owners.set(owner.id, owner.displayName + (owner.active ? "" : " (Отключён)"));
+    }
+  }
   for (const { id, displayName } of participants) owners.set(id, displayName);
+  if (filters.ownerId && !owners.has(filters.ownerId)) owners.set(filters.ownerId, "Выбранный владелец");
 
   return <>
     <header className="page-header">
@@ -98,11 +107,14 @@ export function Register({ api, account, view, onViewChange, label }: {
     {error && <p role="alert" className="error">{error}</p>}
     {message && <p role="status" className="notice">{message}</p>}
     {selection ? <>
-      <button className="quiet back" onClick={() => { setSelection(null); setMessage(""); }}>← К списку</button>
+      {initial.selection && <a className="quiet back" href={riskLink()}>← К списку</a>}
+      {!initial.selection && <button className="quiet back" onClick={() => { setSelection(null); setMessage(""); }}>← К списку</button>}
       <RiskCard key={`${selection.riskId}/${selection.proposal?.versionId ?? "published"}/${cardPeriod}`}
+        initial={cardPeriod === 0 && selection === initial.selection ? initial.card : undefined}
         api={api} selection={selection} account={account} participants={participants} onUpdate={update} />
     </> : <>
-      {publishedView && <form className="panel filters" onSubmit={editFilters} key={view}>
+      {publishedView && <form className="panel filters" method="get" action="/" key={view}>
+        <input type="hidden" name="view" value={view} />
         <label>Поиск<input name="q" type="search" placeholder="Название или описание" defaultValue={filters.q} /></label>
         <label><span id="filter-owner">Владелец</span><select aria-labelledby="filter-owner" name="ownerId" defaultValue={filters.ownerId}>
           <option value="">Все владельцы</option>
@@ -120,7 +132,7 @@ export function Register({ api, account, view, onViewChange, label }: {
       {!currentList && !listError && <p role="status">Загружаем список…</p>}
       {currentList?.items.length === 0 && <div className="panel empty">
         <h2>{view === "review" ? "Очередь пуста" : "Записей пока нет"}</h2>
-        {publishedView && Object.values(filters).some(Boolean) && <p className="muted">Попробуйте изменить поиск или фильтры.</p>}
+        {publishedView && ["q", "ownerId", "category"].some((key) => filters[key]) && <p className="muted">Попробуйте изменить поиск или фильтры.</p>}
       </div>}
       {(currentList?.view === "active" || currentList?.view === "archive") && currentList.items.length > 0 &&
         <div className="panel table-wrap">
@@ -128,9 +140,7 @@ export function Register({ api, account, view, onViewChange, label }: {
             <thead><tr><th>Риск</th><th>Владелец</th><th>Вероятность</th><th>Влияние</th><th>Приоритет</th>
               <th>Дата оценки</th><th>{view === "archive" ? "Состояние" : "Пересмотр"}</th></tr></thead>
             <tbody>{currentList.items.map((item) => <tr key={item.riskId}>
-              <th scope="row"><button className="text-button" onClick={() => {
-                setMessage(""); setSelection({ riskId: item.riskId });
-              }}>{item.title}</button>{item.hasOpenDraft && <small>Правка в работе</small>}</th>
+              <th scope="row"><a className="text-button" href={riskLink(item.riskId)}>{item.title}</a>{item.hasOpenDraft && <small>Правка в работе</small>}</th>
               <td><OwnerName owner={item.owner} /></td>
               <td>{item.likelihood}</td><td>{item.impact}</td>
               <td><PriorityBadge priority={item.priority} /></td>
@@ -147,8 +157,8 @@ export function Register({ api, account, view, onViewChange, label }: {
           <table aria-label={label}>
             <thead><tr><th>Предложение</th><th>Вид</th><th>Автор</th><th>Статус</th></tr></thead>
             <tbody>{currentList.items.map((proposal) => <tr key={proposal.versionId}>
-              <th scope="row"><button className="text-button" onClick={() => openProposal(proposal)}>
-                {proposal.fields.title || "Без названия"}</button></th>
+              <th scope="row"><a className="text-button" href={riskLink(proposal.riskId, proposal.versionId)}>
+                {proposal.fields.title || "Без названия"}</a></th>
               <td>{proposal.kind === "FIRST" ? "Новый риск" : "Правка"}</td>
               <td>{proposal.author.displayName}</td><td><span className="badge">{proposalStatuses[proposal.status]}</span></td>
             </tr>)}</tbody>

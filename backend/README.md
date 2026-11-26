@@ -4,13 +4,15 @@ API пилота на Java 25 LTS и Spring Boot. Spring JDBC работает �
 
 Выполняйте команды из каталога `backend/` с JDK 25. В Windows используйте `./gradlew.bat` вместо `sh ./gradlew`. При первом запуске Wrapper скачивает закреплённую версию Gradle.
 
-## Сборка и тесты
+## Сборка и проверки
+
+Штатный запуск всех сервисов описан в [корневом README](../README.md). Для сборки JAR отдельно выполните:
 
 ```sh
 sh ./gradlew build
 ```
 
-JUnit запускает HTTP-проверки через MockMvc. Testcontainers поднимает отдельный PostgreSQL 17, поэтому для `build` и `test` нужен работающий Docker. ArchUnit проверяет границу между `accounts` и `risks`. Чтобы собрать исполняемый JAR отдельно, используйте `sh ./gradlew bootJar`.
+Поведенческие проверки рабочего API входят в [E2E-набор](../frontend/tests/README.md). Он использует запущенное приложение и тестовую PostgreSQL.
 
 ## Запуск
 

@@ -1,4 +1,4 @@
-import type { Category, Fields, Owner, Participant, Priority, ProposalStatus, RiskState } from "./api";
+import type { Category, Fields, Owner, Participant, Priority, ProposalStatus, PublishedRisk, RiskState } from "./api";
 
 export const categories: Record<Category, string> = { LOW: "Низкий", MEDIUM: "Средний", HIGH: "Высокий" };
 export const riskStates: Record<RiskState, string> = { ACTIVE: "Активен", REMOVED: "Снят", MATERIALIZED: "Реализовался" };
@@ -37,7 +37,7 @@ function Tracker({ value }: { value: string }) {
 }
 
 export function FieldDetails({ fields, owner, priority }: {
-  fields: Omit<Fields, "ownerId">; owner: React.ReactNode; priority?: Priority;
+  fields: Fields | PublishedRisk["snapshot"]; owner: React.ReactNode; priority?: Priority;
 }) {
   const score = priority ?? previewPriority(fields);
   return <div className="details">

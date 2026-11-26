@@ -1,0 +1,10 @@
+.git
+.agents
+.codex
+.idea
+**/node_modules
+**/.next
+**/.gradle
+**/build
+**/.env*
+**/*.tsbuildinfo

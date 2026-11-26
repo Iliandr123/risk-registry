@@ -944,15 +944,20 @@ components:
       $ref: '#/components/schemas/ProposalIdentity'
       unevaluatedProperties: false
     Proposal:
-      $ref: '#/components/schemas/ProposalIdentity'
+      allOf:
+        - $ref: '#/components/schemas/ProposalIdentity'
       required: [kind, author, fields]
       properties:
         kind: { type: string, enum: [FIRST, EDIT] }
         author:
           $ref: '#/components/schemas/Participant'
         fields:
-          $ref: '#/components/schemas/DraftFields'
+          $ref: '#/components/schemas/ProposalFields'
       unevaluatedProperties: false
+    ProposalFields:
+      allOf:
+        - $ref: '#/components/schemas/DraftFields'
+      required: [title, cause, possibleEvent, productConsequences, ownerId, likelihood, impact, decisionNote, trackerUrl, riskState, closureReason]
     ProposalList:
       type: object
       additionalProperties: false

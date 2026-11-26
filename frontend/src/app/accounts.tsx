@@ -1,22 +1,14 @@
-import { useEffect, useState, type FormEvent } from "react";
+import { useState, type FormEvent } from "react";
 import { errorMessage, type Account, type AccountSettings, type Api, type TemporaryPassword } from "./api";
 
-export function Accounts({ api, account, onSessionRevoked }: {
-  api: Api; account: Account; onSessionRevoked: () => void;
+export function Accounts({ api, account, initialAccounts, onSessionRevoked }: {
+  api: Api; account: Account; initialAccounts: Account[]; onSessionRevoked: () => void;
 }) {
-  const [accounts, setAccounts] = useState<Account[] | null>(null);
+  const [accounts, setAccounts] = useState(initialAccounts);
   const [creating, setCreating] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  const [period, setPeriod] = useState(0);
   const [issued, setIssued] = useState<TemporaryPassword | null>(null);
-
-  useEffect(() => {
-    let cancelled = false;
-    api.accounts().then((accounts) => { if (!cancelled) setAccounts(accounts); })
-      .catch((error) => { if (!cancelled) setError(errorMessage(error)); });
-    return () => { cancelled = true; };
-  }, [api, period]);
 
   async function run(operation: () => Promise<void>) {
     setBusy(true);
@@ -31,9 +23,9 @@ export function Accounts({ api, account, onSessionRevoked }: {
   }
 
   function register(updated: Account) {
-    setAccounts((current) => current?.some(({ id }) => id === updated.id)
+    setAccounts((current) => current.some(({ id }) => id === updated.id)
       ? current.map((item) => item.id === updated.id ? updated : item)
-      : [...(current ?? []), updated]);
+      : [...current, updated]);
   }
 
   function create(event: FormEvent<HTMLFormElement>) {
@@ -52,7 +44,7 @@ export function Accounts({ api, account, onSessionRevoked }: {
 
   return <>
     <header className="page-header"><h1>Участники</h1>
-      <button className="primary" disabled={busy || !accounts || !!issued} onClick={() => setCreating(!creating)}>
+      <button className="primary" disabled={busy || !!issued} onClick={() => setCreating(!creating)}>
         {creating ? "Отмена" : "Добавить участника"}
       </button>
     </header>
@@ -80,9 +72,7 @@ export function Accounts({ api, account, onSessionRevoked }: {
         <button className="primary">Создать аккаунт</button>
       </fieldset>
     </form>}
-    {!accounts && (error ? <button onClick={() => { setError(""); setPeriod(period + 1); }}>Повторить</button>
-      : <p role="status">Загружаем участников…</p>)}
-    {accounts && <div className="stack">
+    <div className="stack">
       {accounts.map((item) => <AccountRow key={JSON.stringify(item)} account={item} disabled={busy || !!issued}
         onSave={(settings) => run(async () => {
           register(await api.updateAccount(item.id, settings));
@@ -93,7 +83,7 @@ export function Accounts({ api, account, onSessionRevoked }: {
           register(result.account);
           setIssued(result);
         })} />)}
-    </div>}
+    </div>
   </>;
 }
 

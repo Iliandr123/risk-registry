@@ -1,21 +1,22 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { test } from "node:test";
-import { chromium } from "playwright-core";
+import { chromium, type Browser, type Page, type Locator } from "playwright-core";
 
 const base = process.env.PILOT_UI_URL ?? "http://localhost:3000";
-const button = (page, name) => page.getByRole("button", { name, exact: true });
-const heading = (page, name) => page.getByRole("heading", { name, exact: true });
-const text = (page, value) => page.getByText(value, { exact: true });
+const button = (page: Page | Locator, name: string) => page.getByRole("button", { name, exact: true });
+const link = (page: Page | Locator, name: string) => page.getByRole("link", { name, exact: true });
+const heading = (page: Page, name: string) => page.getByRole("heading", { name, exact: true });
+const text = (page: Page | Locator, value: string) => page.getByText(value, { exact: true });
 
-async function signIn(page, login, password) {
+async function signIn(page: Page, login: string, password: string) {
   await page.goto(base);
   await page.getByLabel("Логин", { exact: true }).fill(login);
   await page.getByLabel("Пароль", { exact: true }).fill(password);
   await button(page, "Войти").click();
 }
 
-async function changePassword(page, temporary, password) {
+async function changePassword(page: Page, temporary: string, password: string) {
   await heading(page, "Смена временного пароля").waitFor();
   assert.equal(await page.getByRole("navigation").count(), 0);
   await page.reload();
@@ -27,7 +28,7 @@ async function changePassword(page, temporary, password) {
   await heading(page, "Активные риски").waitFor();
 }
 
-async function createAccount(admin, login, name) {
+async function createAccount(admin: Page, login: string, name: string) {
   await button(admin, "Добавить участника").click();
   await admin.getByLabel("Имя", { exact: true }).fill(name);
   await admin.getByLabel("Логин", { exact: true }).fill(login);
@@ -39,12 +40,12 @@ async function createAccount(admin, login, name) {
   return password;
 }
 
-async function openListedRisk(page, section, title) {
-  await button(page.getByRole("navigation"), section).click();
-  await button(page, title).click();
+async function openListedRisk(page: Page, section: string, title: string) {
+  await link(page.getByRole("navigation"), section).click();
+  await link(page, title).click();
 }
 
-async function withBrowser(run) {
+async function withBrowser(run: (browser: Browser) => Promise<void>) {
   const browser = await chromium.launch({ channel: process.env.PILOT_BROWSER ?? "chrome" });
   try {
     await run(browser);
@@ -75,14 +76,14 @@ test("рабочий пилот: первый вход, роли, отзыв с�
     if (process.env.PILOT_NEW_ADMIN_PASSWORD) {
       await changePassword(admin, adminPassword, process.env.PILOT_NEW_ADMIN_PASSWORD);
     }
-    await button(admin, "Участники").click();
+    await link(admin, "Участники").click();
     const authorTemp = await createAccount(admin, authorLogin, authorName);
     const reviewerTemp = await createAccount(admin, reviewerLogin, reviewerName);
     await signIn(author, authorLogin, authorTemp);
     await changePassword(author, authorTemp, password);
     await signIn(reviewer, reviewerLogin, reviewerTemp);
     await changePassword(reviewer, reviewerTemp, password);
-    assert.equal(await button(reviewer, "На ревью").count(), 0);
+    assert.equal(await link(reviewer, "На ревью").count(), 0);
 
     const reviewerAccount = admin.locator(".account-row").filter({ hasText: reviewerName });
     await reviewerAccount.getByLabel("Ревьюер", { exact: true }).check();
@@ -90,19 +91,24 @@ test("рабочий пилот: первый вход, роли, отзыв с�
       response.url().includes("/api/admin/accounts/") && response.request().method() === "PATCH");
     await button(reviewerAccount, "Сохранить").click();
     assert.equal((await roleChange).status(), 200);
-    await button(admin.getByRole("navigation"), "Активные риски").click();
-    await button(reviewer, "Архив").click();
+    await link(admin.getByRole("navigation"), "Активные риски").click();
+    await link(reviewer, "Архив").click();
     await heading(reviewer, "Вход в реестр").waitFor();
     await signIn(reviewer, reviewerLogin, password);
     await signIn(stale, reviewerLogin, password);
-    await button(reviewer, "На ревью").waitFor();
-    assert.equal(await button(reviewer, "Участники").count(), 0);
+    await link(reviewer, "На ревью").waitFor();
+    assert.equal(await link(reviewer, "Участники").count(), 0);
 
     await button(author, "＋ Предложить риск").click();
     await author.getByLabel("Название *", { exact: true }).fill(title);
     assert.equal(await author.getByRole("combobox", { name: /^Владелец/ }).locator("option:checked").innerText(), authorName);
     await button(author, "Сохранить черновик").click();
     await text(author, "Черновик сохранён.").waitFor();
+    const riskId = await author.locator(".card-id code").innerText();
+    const privateDraft = await reviewer.request.get(`${base}/api/risks/${riskId}/draft`);
+    assert.equal(privateDraft.status(), 404);
+    const privateHistory = await reviewer.request.get(`${base}/api/risks/${riskId}/history`);
+    assert.equal(privateHistory.status(), 404);
     await button(author, "Отправить на ревью").click();
     await text(author, "Заполните поля со звёздочкой перед отправкой на ревью.").waitFor();
     await author.getByLabel("Причина *", { exact: true }).fill("Ручная сортировка заявок.");
@@ -140,14 +146,14 @@ test("рабочий пилот: первый вход, роли, отзыв с�
     await button(reviewer, "Утвердить").click();
     await text(reviewer, "Версия утверждена.").waitFor();
 
-    await button(author.getByRole("navigation"), "Активные риски").click();
+    await link(author.getByRole("navigation"), "Активные риски").click();
     await author.getByLabel("Поиск").fill("превышает два дня");
     await author.getByLabel("Категория").selectOption("LOW");
     await author.getByLabel("Владелец").selectOption({ label: authorName });
     await button(author, "Найти").click();
-    await button(author, title).waitFor();
+    await link(author, title).waitFor();
     if (process.env.PILOT_SCREENSHOT) await author.screenshot({ path: process.env.PILOT_SCREENSHOT, fullPage: true });
-    await button(author, title).click();
+    await link(author, title).click();
     await text(author, note).first().waitFor();
     await button(author, "Предложить правку").click();
     await author.getByLabel("Решение и меры", { exact: true }).fill("Установлена автоматическая сортировка заявок.");
@@ -168,11 +174,11 @@ test("рабочий пилот: первый вход, роли, отзыв с�
     await author.locator("summary").filter({ hasText: `Версия 1 · ${title}` }).click();
     await text(author.locator("details[open]"), note).waitFor();
 
-    await button(admin, "Участники").click();
+    await link(admin, "Участники").click();
     await reviewerAccount.getByLabel("Активен", { exact: true }).uncheck();
     await button(reviewerAccount, "Сохранить").click();
     await reviewerAccount.getByText(`${reviewerLogin} · Отключён`).waitFor();
-    await button(reviewer, "Мои предложения").click();
+    await link(reviewer, "Мои предложения").click();
     await heading(reviewer, "Вход в реестр").waitFor();
   });
 });

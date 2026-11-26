@@ -5,9 +5,13 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
-    "start": "next start",
-    "lint": "eslint .",
-    "typecheck": "tsc --noEmit"
+    "start": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/start.ts",
+    "lint": "eslint --flag unstable_native_nodejs_ts_config .",
+    "typecheck": "tsc --noEmit",
+    "api:generate": "openapi-typescript ../api/openapi.yml -o src/app/api.generated.ts",
+    "api:check": "npm run api:generate -- --check",
+    "test:components": "npm run build && node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --test tests/components.test.ts",
+    "test:e2e": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --test tests/pilot.e2e.test.ts"
   },
   "dependencies": {
     "next": "^16.0.0",
@@ -18,12 +22,16 @@
     "@types/node": "^24.0.0",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
+    "ajv": "^8.20.0",
+    "ajv-formats": "^3.0.1",
     "eslint": "^9.0.0",
     "eslint-config-next": "^16.0.0",
+    "openapi-typescript": "^7.13.0",
     "playwright-core": "^1.65.1",
-    "typescript": "^5.0.0"
+    "typescript": "^5.0.0",
+    "yaml": "^2.9.1"
   },
   "engines": {
-    "node": ">=20.9.0"
+    "node": ">=24"
   }
 }
