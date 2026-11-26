@@ -16,8 +16,17 @@ tasks.withType(JavaCompile).configureEach {
     options.encoding = 'UTF-8'
 }
 
+tasks.named('bootRun') {
+    systemProperty 'spring.profiles.default', 'local'
+}
+
 repositories {
     mavenCentral()
+}
+
+def swaggerUiAssets = configurations.dependencyScope('swaggerUiAssets').get()
+def swaggerUi = configurations.resolvable('swaggerUi') {
+    extendsFrom(swaggerUiAssets)
 }
 
 dependencies {
@@ -28,5 +37,16 @@ dependencies {
     implementation 'org.springframework.security:spring-security-crypto'
     implementation 'com.github.ben-manes.caffeine:caffeine'
     runtimeOnly 'org.postgresql:postgresql'
+    add('swaggerUiAssets', 'org.webjars:swagger-ui:5.34.1')
+}
 
+tasks.named('processResources') {
+    from(layout.projectDirectory.file('../api/openapi.yml')) {
+        into 'swagger-ui'
+    }
+    from({ zipTree(swaggerUi.get().singleFile) }) {
+        include '**/swagger-ui-bundle.js', '**/swagger-ui.css'
+        eachFile { path = "swagger-ui/${name}" }
+        includeEmptyDirs = false
+    }
 }

@@ -14,7 +14,8 @@ services:
       retries: 20
   backend:
     build:
-      context: backend
+      context: .
+      dockerfile: backend/Dockerfile
     environment:
       SPRING_DATASOURCE_URL: jdbc:postgresql://db:5432/risk_register
       SPRING_DATASOURCE_USERNAME: risk_register

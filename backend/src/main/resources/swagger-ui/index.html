@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="ru">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>API командного реестра рисков</title>
+    <link rel="stylesheet" href="./swagger-ui.css">
+</head>
+<body>
+    <div id="swagger-ui"></div>
+    <script src="./swagger-ui-bundle.js"></script>
+    <script>
+        SwaggerUIBundle({
+            dom_id: "#swagger-ui",
+            url: "./openapi.yml",
+            validatorUrl: null
+        });
+    </script>
+</body>
+</html>

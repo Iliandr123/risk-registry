@@ -2,7 +2,77 @@
 
 API пилота на Java 25 LTS и Spring Boot. Spring JDBC работает с PostgreSQL, Liquibase применяет миграции при запуске.
 
-Выполняйте команды из каталога `backend/` с JDK 25. В Windows используйте `./gradlew.bat` вместо `sh ./gradlew`. При первом запуске Wrapper скачивает закреплённую версию Gradle.
+## Локальный запуск API
+
+Для варианта с Compose нужен Docker с Compose v2. Для запуска через Gradle также нужен JDK 25. В корне проекта скопируйте `.env.example` в `.env` (`Copy-Item .env.example .env` в PowerShell, `cp .env.example .env` в Bash). Задайте свой `POSTGRES_PASSWORD`. Для общего файла Compose и Gradle используйте длинный пароль из букв, цифр, дефисов и подчёркиваний, без кавычек. Если порты заняты, измените `LOCAL_DB_PORT` или `LOCAL_API_PORT` в этом файле.
+
+### API и PostgreSQL в Docker Compose
+
+Из корня проекта выполните одну команду. Compose поднимет PostgreSQL, дождётся его готовности, запустит API и дождётся его готовности.
+
+```sh
+docker compose -f compose.yaml -f compose.local.yaml up --build --wait backend
+```
+
+### API через Gradle Wrapper
+
+Из корня проекта поднимите PostgreSQL, затем запустите API из каталога `backend/`.
+
+```sh
+docker compose -f compose.yaml -f compose.local.yaml up --wait db
+cd backend
+sh ./gradlew bootRun
+```
+
+В PowerShell последняя команда выглядит так: `./gradlew.bat bootRun`. Профиль `local` загружает параметры из корневого `.env`. Если контейнер API уже запущен, остановите его из корня командой `docker compose -f compose.yaml -f compose.local.yaml stop backend`, чтобы освободить порт.
+
+### Проверка и остановка
+
+Проверьте ответ `200 OK` по адресу `http://127.0.0.1:8080/api/csrf` или подставьте свой `LOCAL_API_PORT`. При запуске Liquibase создаёт таблицы в пустой базе. Остановите Gradle через Ctrl+C, а контейнеры из корня проекта командой `docker compose -f compose.yaml -f compose.local.yaml down`. Данные сохраняются в томе локального проекта Compose.
+
+### Swagger UI
+
+После запуска через Gradle или локальную конфигурацию Compose откройте [http://localhost:8080/swagger-ui.html](http://localhost:8080/swagger-ui.html). Если меняли `LOCAL_API_PORT`, подставьте свой порт. Swagger UI загружает [контракт API](../api/openapi.yml), упакованный при сборке бэкенда. Для запросов с защищёнными cookies открывайте страницу по адресу `localhost`.
+
+### Подключение через DBeaver
+
+При запущенном контейнере `db` создайте новое подключение **PostgreSQL** в DBeaver и заполните поля на вкладке **Main**.
+
+| Поле | Значение |
+| --- | --- |
+| Host | `127.0.0.1` |
+| Port | `5432` или значение `LOCAL_DB_PORT` из `.env` |
+| Database | `risk_register` |
+| Username | `risk_register` |
+| Password | Значение `POSTGRES_PASSWORD` из `.env` |
+
+Нажмите **Test Connection**, при необходимости скачайте драйвер PostgreSQL по предложению DBeaver, затем нажмите **Finish**. После запуска API таблицы доступны в **Schemas → public → Tables**. [Настройки PostgreSQL в документации DBeaver](https://dbeaver.com/docs/dbeaver/Database-driver-PostgreSQL/).
+
+Если DBeaver сообщает, что соединение отклонено, проверьте адрес `127.0.0.1` и порт в выводе `docker compose -f compose.yaml -f compose.local.yaml ps db`. При запуске всего пилота через обычный `docker compose up` порт PostgreSQL доступен только внутри Docker. Чтобы открыть порт для уже запущенного локального пилота и подключиться к его данным, добавьте локальную конфигурацию к тому же проекту:
+
+```sh
+docker compose -p uptime-app -f compose.yaml -f compose.local.yaml up --wait db
+```
+
+Замените `uptime-app` именем своего проекта из `docker compose ls`, если оно отличается. Compose перезапустит контейнер базы с тем же томом. При следующих запусках этого проекта указывайте то же имя через `-p` и оба файла Compose, чтобы сохранить публикацию порта.
+
+### Первый администратор
+
+На пустой базе выполните команду один раз в приватном терминале. При запуске через Gradle используйте следующую команду из `backend/`.
+
+```sh
+sh ./gradlew bootRun --args='bootstrap-admin operator Operator'
+```
+
+В PowerShell используйте `./gradlew.bat bootRun --args='bootstrap-admin operator Operator'`.
+
+При запуске через Compose выполните из корня проекта:
+
+```sh
+docker compose -f compose.yaml -f compose.local.yaml run --rm backend bootstrap-admin operator "Администратор пилота"
+```
+
+Команда печатает временный пароль администратора для первого входа в приложение.
 
 ## Сборка и проверки
 
@@ -14,9 +84,9 @@ sh ./gradlew build
 
 Поведенческие проверки рабочего API входят в [E2E-набор](../frontend/tests/README.md). Он использует запущенное приложение и тестовую PostgreSQL.
 
-## Запуск
+## Подключение к отдельной PostgreSQL
 
-Создайте пустую базу PostgreSQL и задайте переменные окружения для приложения.
+Создайте пустую базу PostgreSQL и задайте переменные окружения для `sh ./gradlew bootRun` или запуска собранного JAR.
 
 | Переменная | Значение |
 | --- | --- |
