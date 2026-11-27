@@ -478,8 +478,8 @@ paths:
       description: |
         Доступно всем активным участникам после первой публикации, включая архив.
         В карточке видны автор первого утверждённого предложения, текущее назначение,
-        группа и наличие незавершённой правки. Если правку создал другой участник,
-        ревьюер дополнительно получает метаданные для её разблокировки.
+        группа и наличие незавершённого предложения о завершении. Если его создал
+        другой участник, ревьюер дополнительно получает метаданные для закрытия.
       responses:
         '200':
           description: Карточка с текущей утверждённой версией
@@ -494,6 +494,54 @@ paths:
         '404':
           $ref: '#/components/responses/NotFound'
 
+    patch:
+      operationId: updatePublishedRisk
+      tags: [Риски]
+      summary: Сохранить поля опубликованного риска
+      description: |
+        Доступно текущему ответственному, ревьюеру или администратору из числа
+        активных участников. Право проверяется по текущему назначению. Для
+        отсутствующего или неопубликованного риска возвращается 404. Для
+        архивного риска или устаревшей опубликованной версии возвращается 409.
+
+        Пропущенные поля сохраняют текущие значения. Null очищает заметку или
+        ссылку. Сервер проверяет всю карточку после применения полей.
+        При актуальной версии и совпадении значений возвращается текущая карточка
+        без новой версии и события. Изменение сразу публикуется и создаёт одно
+        событие FIELDS_UPDATED. Состояние риска, назначение, группа, случаи
+        проявления и открытое предложение о завершении сохраняются.
+
+        Изменение вероятности или влияния пересчитывает приоритет и устанавливает
+        дату оценки на текущую календарную дату команды. Срок пересмотра наступает
+        через три календарных месяца или в последний день месяца, если нужного
+        числа нет. При остальных правках сохраняются актуальные дата оценки и срок.
+      security:
+        - SessionCookie: []
+          CsrfHeader: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdatePublishedRiskRequest'
+      responses:
+        '200':
+          description: Карточка с актуальной опубликованной версией
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PublishedRisk'
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/ForbiddenOrCsrfRejected'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/RiskConflict'
+
   /risks/{id}/history:
     parameters:
       - $ref: '#/components/parameters/RiskId'
@@ -503,12 +551,16 @@ paths:
       summary: Прочитать доступную историю риска
       description: |
         После публикации общая история содержит утверждённые снимки и события
-        утверждения, подтверждения оценки, изменения и переноса назначения, смены группы.
+        утверждения, прямого редактирования, подтверждения оценки, изменения
+        и переноса назначения, смены группы. Прямое редактирование видно всем
+        активным участникам и содержит прежние и новые значения изменённых полей.
         Названия групп отражают состояние справочника на момент события.
         История предложения доступна автору,
         а ревьюерам — после отправки предложения, включая возврат, отзыв и закрытие.
         События и содержимое приватного черновика доступны в истории только автору,
-        включая результат разблокировки чужого черновика. Если риск ещё не опубликован
+        включая результат разблокировки чужого черновика. Эти же правила действуют
+        для содержимого старых правок, закрытых при переходе на прямое редактирование,
+        и событий их закрытия. Если риск ещё не опубликован
         и у участника нет доступа к его предложениям, возвращается 404.
       responses:
         '200':
@@ -562,7 +614,7 @@ paths:
       summary: Добавить случай проявления риска
       description: |
         Доступно любому активному участнику для активного опубликованного риска,
-        в том числе при открытой правке. Повторы текста и ссылок допускаются.
+        в том числе при открытом предложении о завершении. Повторы текста и ссылок допускаются.
         Запись сразу видна команде и сохраняется при публикации новой версии риска.
         Автором становится текущий участник. Начальная ревизия равна 1.
         Статус, приоритет, дата оценки и срок пересмотра риска сохраняются.
@@ -691,7 +743,7 @@ paths:
 
         При актуальной ревизии и совпадающем значении возвращается карточка без
         изменения ревизии и истории. При изменении назначение сохраняется вместе
-        с новой ревизией и событием истории. Опубликованная версия, открытая правка,
+        с новой ревизией и событием истории. Опубликованная версия, предложение о завершении,
         дата оценки и срок пересмотра сохраняются.
       security:
         - SessionCookie: []
@@ -751,7 +803,7 @@ paths:
         Ревизия проверяется до сравнения с текущей группой. При актуальной ревизии
         и совпадающем значении возвращается карточка без изменений. Смена группы
         сохраняется вместе с новой ревизией и событием истории. Опубликованная версия,
-        открытая правка, дата оценки и срок пересмотра сохраняются.
+        предложение о завершении, дата оценки и срок пересмотра сохраняются.
       security:
         - SessionCookie: []
           CsrfHeader: []
@@ -785,19 +837,27 @@ paths:
     post:
       operationId: openRiskDraft
       tags: [Риски]
-      summary: Открыть правку опубликованного риска
+      summary: Открыть предложение о завершении опубликованного риска
       description: |
-        Любой активный участник может открыть правку текущего снимка активного риска.
-        Новая версия начинает с полей опубликованного снимка и номера изменения 1.
-        Если снимок устарел или уже есть незавершённая правка, возвращается 409.
+        Любой активный участник может открыть предложение о завершении текущего
+        снимка активного риска. Требуется состояние REMOVED или MATERIALIZED.
+        Запрос прежнего формата без состояния возвращает 400. Причину можно указать
+        при создании или заполнить в черновике до отправки. Новое предложение
+        получает номер изменения 1. Если снимок устарел, риск архивирован или уже
+        есть открытое предложение о завершении, возвращается 409. Для отсутствующего
+        или неопубликованного риска возвращается 404.
       security:
         - SessionCookie: []
           CsrfHeader: []
       requestBody:
-        $ref: '#/components/requestBodies/ExpectedSnapshot'
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/OpenRiskCompletionRequest'
       responses:
         '201':
-          description: Правка открыта
+          description: Предложение о завершении открыто
           content:
             application/json:
               schema:
@@ -819,6 +879,7 @@ paths:
       description: |
         Черновик доступен автору. Отправленная и возвращённая версии доступны автору
         и ревьюерам. Запрос чужого приватного черновика возвращает 404, в том числе ревьюеру.
+        После публикации операция возвращает открытое предложение о завершении.
         Выбор группы первого предложения виден только тем, кому доступно само предложение.
       responses:
         '200':
@@ -840,9 +901,10 @@ paths:
       description: |
         Только автор версии в статусе DRAFT или RETURNED. Отсутствующие поля
         сохраняют прежние значения, а null очищает допускающее его поле.
-        fields.groupId допускается только в первом предложении. Если поле отсутствует,
-        сохраняется прежний выбор. null снимает выбор. UUID должен указывать на
-        существующую группу. Поле в правке или неизвестный UUID дают 400.
+        Для первого предложения действуют поля DraftFields. Пропущенный groupId
+        сохраняет прежний выбор, null снимает выбор, UUID должен указывать на
+        существующую группу. Для предложения о завершении применяются ограничения
+        RiskCompletionFields. Недопустимое поле или значение возвращает 400.
         Версия на ревью, смена версии или устаревший номер изменения дают 409
         для участника, имевшего право сохранить переданную версию.
       security:
@@ -886,19 +948,21 @@ paths:
       tags: [Риски]
       summary: Выполнить действие над предложением
       description: |
-        - submit — автор отправляет DRAFT или RETURNED с заполненными названием,
-          причиной, возможным событием, последствиями для продукта и оценками.
+        - submit — автор отправляет DRAFT или RETURNED. Для первого предложения
+          обязательны название, причина, возможное событие, последствия для продукта
+          и оценки. Для завершения обязательны REMOVED или MATERIALIZED и непустая
+          причина в closureReason.
         - return — ревьюер возвращает IN_REVIEW автору. Требуется непустой comment.
         - approve — ревьюер утверждает IN_REVIEW, включая собственное предложение.
           Риск впервые публикуется без ответственного и с группой первого предложения.
-          Событие первого утверждения содержит название группы или null. Утверждение
-          правки, включая завершение риска, сохраняет текущее назначение и группу
-          вместе с их ревизиями. Завершение
-          требует причины в closureReason. При успехе указатель публикации переключается
-          на утверждаемую версию, а прежние утверждённые снимки сохраняются.
+          Событие первого утверждения содержит название группы или null. При
+          утверждении завершения статус и причина применяются к последней
+          опубликованной версии. Актуальные назначение, группа и их ревизии,
+          дата оценки и случаи проявления сохраняются. При успехе указатель
+          публикации переключается на новый снимок, прежние снимки сохраняются.
         - withdraw — автор отзывает DRAFT, IN_REVIEW или RETURNED. Для первого
           предложения повторная подача начинается с нового риска.
-        - unblock — ревьюер закрывает чужую незавершённую правку или первое предложение
+        - unblock — ревьюер закрывает чужое предложение о завершении или первое предложение
           в статусе IN_REVIEW или RETURNED. Требуется непустой comment. Первый
           приватный черновик недоступен для этого действия.
 
@@ -940,7 +1004,7 @@ paths:
       summary: Подтвердить оценку текущего опубликованного снимка
       description: |
         Только ревьюер. Для активного риска обновляет дату оценки и добавляет событие
-        в историю. Открытая правка сохраняет свои поля, статус и номер изменения.
+        в историю. Открытое предложение о завершении сохраняет свои поля, статус и номер изменения.
         Устаревший снимок отклоняется без изменения даты.
       security:
         - SessionCookie: []
@@ -1392,6 +1456,54 @@ components:
           anyOf:
             - $ref: '#/components/schemas/RiskOccurrenceCursor'
             - type: 'null'
+    PublishedRiskPatchFields:
+      type: object
+      additionalProperties: false
+      properties:
+        title:
+          $ref: '#/components/schemas/NonBlankText'
+        cause:
+          $ref: '#/components/schemas/NonBlankText'
+        possibleEvent:
+          $ref: '#/components/schemas/NonBlankText'
+        productConsequences:
+          $ref: '#/components/schemas/NonBlankText'
+        likelihood:
+          $ref: '#/components/schemas/ScoreInput'
+        impact:
+          $ref: '#/components/schemas/ScoreInput'
+        decisionNote: { type: [string, 'null'] }
+        trackerUrl: { type: [string, 'null'], format: uri }
+    UpdatePublishedRiskRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedPublishedVersionId, fields]
+      properties:
+        expectedPublishedVersionId:
+          $ref: '#/components/schemas/Id'
+        fields:
+          $ref: '#/components/schemas/PublishedRiskPatchFields'
+    RiskCompletionState:
+      type: string
+      enum: [REMOVED, MATERIALIZED]
+    OpenRiskCompletionRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedPublishedVersionId, riskState]
+      properties:
+        expectedPublishedVersionId:
+          $ref: '#/components/schemas/Id'
+        riskState:
+          $ref: '#/components/schemas/RiskCompletionState'
+        closureReason: { type: [string, 'null'] }
+    RiskCompletionFields:
+      description: Поля, допустимые в PATCH незавершённого предложения о завершении.
+      type: object
+      additionalProperties: false
+      properties:
+        riskState:
+          $ref: '#/components/schemas/RiskCompletionState'
+        closureReason: { type: [string, 'null'] }
     DraftFields:
       type: object
       additionalProperties: false
@@ -1421,7 +1533,10 @@ components:
         expectedRevision:
           $ref: '#/components/schemas/Revision'
         fields:
-          $ref: '#/components/schemas/DraftFields'
+          description: Допустимая схема зависит от вида предложения на сервере.
+          anyOf:
+            - $ref: '#/components/schemas/DraftFields'
+            - $ref: '#/components/schemas/RiskCompletionFields'
     DraftActionRequest:
       type: object
       additionalProperties: false
@@ -1539,7 +1654,9 @@ components:
           $ref: '#/components/schemas/RiskState'
         assessment:
           $ref: '#/components/schemas/Assessment'
-        hasOpenDraft: { type: boolean }
+        hasOpenDraft:
+          type: boolean
+          description: Есть открытое предложение о завершении.
     PublishedRiskList:
       type: object
       additionalProperties: false
@@ -1635,13 +1752,58 @@ components:
         hasOpenDraft: { type: boolean }
         unblock:
           $ref: '#/components/schemas/UnblockMetadata'
-          description: Только для ревьюера при незавершённой правке другого участника.
+          description: Только для ревьюера при открытом предложении о завершении другого участника.
       if:
         properties:
           hasOpenDraft: { const: false }
       then:
         properties:
           unblock: false
+    PublishedRiskFieldChange:
+      type: object
+      additionalProperties: false
+      required: [field, previousValue, newValue]
+      properties:
+        field:
+          type: string
+          enum: [title, cause, possibleEvent, productConsequences, likelihood, impact, decisionNote, trackerUrl]
+        previousValue:
+          type: [string, integer, 'null']
+        newValue:
+          type: [string, integer, 'null']
+      allOf:
+        - if:
+            properties:
+              field: { enum: [title, cause, possibleEvent, productConsequences] }
+          then:
+            properties:
+              previousValue:
+                $ref: '#/components/schemas/NonBlankText'
+              newValue:
+                $ref: '#/components/schemas/NonBlankText'
+        - if:
+            properties:
+              field: { enum: [likelihood, impact] }
+          then:
+            properties:
+              previousValue:
+                $ref: '#/components/schemas/ScoreInput'
+              newValue:
+                $ref: '#/components/schemas/ScoreInput'
+        - if:
+            properties:
+              field: { const: decisionNote }
+          then:
+            properties:
+              previousValue: { type: [string, 'null'] }
+              newValue: { type: [string, 'null'] }
+        - if:
+            properties:
+              field: { const: trackerUrl }
+          then:
+            properties:
+              previousValue: { type: [string, 'null'], format: uri }
+              newValue: { type: [string, 'null'], format: uri }
     RiskEvent:
       type: object
       additionalProperties: false
@@ -1649,7 +1811,9 @@ components:
       properties:
         versionId:
           $ref: '#/components/schemas/Id'
-          description: Для событий назначения и смены группы это версия, опубликованная на момент события.
+          description: |
+            Для событий назначения и смены группы это версия, опубликованная
+            на момент события. Для FIELDS_UPDATED это новый опубликованный снимок.
         actor:
           description: Инициатор события. При системном переносе значение равно null.
           anyOf:
@@ -1657,10 +1821,19 @@ components:
             - type: 'null'
         action:
           type: string
-          enum: [SUBMIT, RETURN, APPROVE, WITHDRAW, UNBLOCK, CONFIRM_ASSESSMENT, ASSIGNMENT_CHANGED, ASSIGNMENT_MIGRATED, GROUP_CHANGED]
-          description: ASSIGNMENT_MIGRATED обозначает системный перенос из прежнего реестра.
+          enum: [SUBMIT, RETURN, APPROVE, WITHDRAW, UNBLOCK, CONFIRM_ASSESSMENT, ASSIGNMENT_CHANGED, ASSIGNMENT_MIGRATED, GROUP_CHANGED, FIELDS_UPDATED, EDIT_CLOSED_BY_MIGRATION]
+          description: |
+            ASSIGNMENT_MIGRATED обозначает системный перенос назначения.
+            EDIT_CLOSED_BY_MIGRATION обозначает системное закрытие старой обычной правки.
         occurredAt: { type: string, format: date-time }
         comment: { type: [string, 'null'] }
+        changes:
+          description: Прежние и новые значения только изменившихся полей, по одному элементу на поле.
+          type: array
+          minItems: 1
+          maxItems: 8
+          items:
+            $ref: '#/components/schemas/PublishedRiskFieldChange'
         previousAssignee:
           anyOf:
             - $ref: '#/components/schemas/Participant'
@@ -1684,6 +1857,25 @@ components:
           pattern: '\S'
           description: Новое название группы на момент смены или null.
       allOf:
+        - if:
+            properties:
+              action: { const: FIELDS_UPDATED }
+          then:
+            required: [changes]
+            properties:
+              occurredAt: { pattern: 'Z$' }
+          else:
+            properties:
+              changes: false
+        - if:
+            properties:
+              action: { const: EDIT_CLOSED_BY_MIGRATION }
+          then:
+            required: [comment]
+            properties:
+              actor: { type: 'null' }
+              comment:
+                $ref: '#/components/schemas/NonBlankText'
         - if:
             properties:
               action: { const: GROUP_CHANGED }
@@ -1717,6 +1909,9 @@ components:
               previousAssignee: { type: 'null' }
               newAssignee:
                 $ref: '#/components/schemas/Participant'
+        - if:
+            properties:
+              action: { enum: [ASSIGNMENT_MIGRATED, EDIT_CLOSED_BY_MIGRATION] }
           else:
             properties:
               actor:
@@ -1736,3 +1931,15 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/RiskEvent'
+        closedProposals:
+          description: |
+            Обычные правки, закрытые при переходе на прямое редактирование и
+            видимые участнику. Черновики видит автор, ранее отправленные правки
+            также видят ревьюеры. Причина закрытия находится в событии
+            EDIT_CLOSED_BY_MIGRATION с тем же versionId.
+          type: array
+          items:
+            $ref: '#/components/schemas/Proposal'
+            properties:
+              kind: { const: EDIT }
+              status: { const: CLOSED }

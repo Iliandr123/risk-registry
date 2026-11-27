@@ -31,7 +31,7 @@ class RiskStore {
 
     enum EventAction {
         SUBMIT, RETURN, APPROVE, WITHDRAW, UNBLOCK, CONFIRM_ASSESSMENT, ASSIGNMENT_CHANGED, ASSIGNMENT_MIGRATED,
-        GROUP_CHANGED;
+        GROUP_CHANGED, FIELDS_UPDATED, EDIT_CLOSED_BY_MIGRATION;
 
         boolean isAssignment() {
             return this == ASSIGNMENT_CHANGED || this == ASSIGNMENT_MIGRATED;
@@ -50,7 +50,7 @@ class RiskStore {
 
     record Event(UUID versionId, UUID actorId, EventAction action, OffsetDateTime occurredAt, String comment,
                  UUID previousAssigneeId, UUID newAssigneeId, boolean firstPublicationWithGroupHistory,
-                 String initialGroupName, String previousGroupName, String newGroupName) {}
+                 String initialGroupName, String previousGroupName, String newGroupName, UUID previousVersionId) {}
 
     private final JdbcClient jdbc;
 
@@ -149,17 +149,30 @@ class RiskStore {
                 version.status(), fields, version.historicalOwnerId(), version.submitted(), proposedGroupId);
     }
 
-    RiskVersion transition(RiskVersion version, Status status) {
-        jdbc.sql("UPDATE risk_versions SET status = ?, revision = revision + 1 WHERE id = ?")
-                .param(status.name()).param(version.id()).update();
+    RiskVersion transition(RiskVersion version, Status status, DraftFields fields) {
+        bindFields(jdbc.sql("UPDATE risk_versions SET (" + FIELD_COLUMNS + ") = (" + FIELD_VALUES
+                        + "), status = :status, revision = revision + 1 WHERE id = :id"), fields)
+                .param("status", status.name()).param("id", version.id()).update();
         return new RiskVersion(version.riskId(), version.id(), version.authorId(), version.revision() + 1,
-                status, version.fields(), version.historicalOwnerId(), version.submitted() || status == Status.IN_REVIEW,
+                status, fields, version.historicalOwnerId(), version.submitted() || status == Status.IN_REVIEW,
                 version.proposedGroupId());
     }
 
     void publish(UUID riskId, UUID versionId, LocalDate assessmentDate) {
         jdbc.sql("UPDATE risks SET published_version_id = ?, assessment_date = ? WHERE id = ?")
                 .param(versionId).param(assessmentDate).param(riskId).update();
+    }
+
+    UUID insertPublishedEdit(Risk risk, UUID actorId, DraftFields fields, OffsetDateTime time) {
+        UUID id = UUID.randomUUID();
+        bindFields(jdbc.sql("INSERT INTO risk_versions (id, risk_id, author_id, status, "
+                        + FIELD_COLUMNS + ") VALUES (:id, :risk, :author, 'APPROVED', " + FIELD_VALUES + ")"), fields)
+                .param("id", id).param("risk", risk.id()).param("author", actorId).update();
+        jdbc.sql("""
+                INSERT INTO risk_events (risk_id, version_id, actor_id, action, occurred_at, previous_version_id)
+                VALUES (?, ?, ?, 'FIELDS_UPDATED', ?, ?)
+                """).param(risk.id()).param(id).param(actorId).param(time).param(risk.publishedVersionId()).update();
+        return id;
     }
 
     void publishFirst(RiskVersion version, UUID actorId, OffsetDateTime time, String comment, String initialGroupName) {
@@ -209,7 +222,8 @@ class RiskStore {
                         EventAction.valueOf(row.getString("action")), row.getObject("occurred_at", OffsetDateTime.class),
                         row.getString("comment"), uuid(row, "previous_assignee_id"), uuid(row, "new_assignee_id"),
                         row.getBoolean("first_publication_with_group_history"), row.getString("initial_group_name"),
-                        row.getString("previous_group_name"), row.getString("new_group_name"))).list();
+                        row.getString("previous_group_name"), row.getString("new_group_name"),
+                        uuid(row, "previous_version_id"))).list();
     }
 
     private static JdbcClient.StatementSpec bindFields(JdbcClient.StatementSpec query, DraftFields fields) {

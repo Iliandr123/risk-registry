@@ -126,8 +126,8 @@ test("API групп рисков: справочник, публикация, �
   const history = async (path: string) => read<History>(await other.send(`${path}/history`), 200, "getRiskHistory");
   const move = (path: string, groupId: string | null, expectedGroupRevision: number, actor = reviewer, csrf = true) =>
     actor.send(`${path}/group`, "PATCH", { groupId, expectedGroupRevision }, csrf);
-  const openEdit = async (path: string, published: Published) => read<Proposal>(await author.send(`${path}/draft`, "POST", {
-    expectedPublishedVersionId: published.snapshot.versionId,
+  const openCompletion = async (path: string, published: Published) => read<Proposal>(await author.send(`${path}/draft`, "POST", {
+    expectedPublishedVersionId: published.snapshot.versionId, riskState: "REMOVED",
   }), 201, "openRiskDraft");
   const list = async (filter: Record<string, string>) => {
     const query = new URLSearchParams({ q: suffix, ...filter });
@@ -183,7 +183,7 @@ test("API групп рисков: справочник, публикация, �
   await error(await move(path, null, 1, author), 403, "FORBIDDEN", "updateRiskGroup");
   await error(await move(path, null, 1, reviewer, false), 403, "CSRF_REJECTED", "updateRiskGroup");
   await error(await move(path, randomUUID(), 1), 400, "INVALID_REQUEST", "updateRiskGroup");
-  const edit = await openEdit(path, initial);
+  const edit = await openCompletion(path, initial);
   assert.equal(Object.hasOwn(edit.fields, "groupId"), false);
   await error(await save(path, edit, { groupId: null }), 400, "INVALID_REQUEST", "saveRiskDraft");
   const [winner, stale] = (await Promise.all([move(path, secondGroup.id, 1), move(path, secondGroup.id, 1, admin)]))
@@ -204,10 +204,8 @@ test("API групп рисков: справочник, публикация, �
   assert.equal(firstMove[0].previousGroupName, renamedFirst.name);
   assert.equal(firstMove[0].newGroupName, tips);
 
-  assert.equal((await action(path, "approve", await submit(path, edit))).status, 200);
+  assert.equal((await action(path, "withdraw", edit, author)).status, 200);
   assert.deepEqual((await card(path)).group, secondGroup);
-  assert.equal(Object.hasOwn((await history(path)).events.filter((event) => event.action === "APPROVE").at(-1)!,
-    "initialGroupName"), false);
   const renamedSecond = await read<Group>(await rename(secondGroup, `Чай ${suffix}`), 200, "renameRiskGroup");
   assert.deepEqual((await history(path)).events.filter((event) => event.action === "GROUP_CHANGED"), firstMove);
   assert.equal((await history(path)).events.find((event) => event.action === "APPROVE")?.initialGroupName, payments);
@@ -222,7 +220,7 @@ test("API групп рисков: справочник, публикация, �
   assert.deepEqual(await ids({ group: "ungrouped" }), [draft.riskId, ungrouped.riskId].sort());
 
   async function closing(path: string, state: Published) {
-    const edit = await openEdit(path, state);
+    const edit = await openCompletion(path, state);
     const updated = await read<Proposal>(await save(path, edit, {
       riskState: "REMOVED", closureReason: "Работа завершена",
     }), 200, "saveRiskDraft");
@@ -237,6 +235,8 @@ test("API групп рисков: справочник, публикация, �
     move(path, firstGroup.id, 4), action(path, "approve", finish),
   ]);
   assert.equal(approval.status, 200);
+  assert.equal(Object.hasOwn((await history(path)).events.filter((event) => event.action === "APPROVE").at(-1)!,
+    "initialGroupName"), false);
   const archivedGroup = transfer.status === 200 ? renamedFirst : renamedSecond;
   if (transfer.status === 200) {
     assert.equal((await read<Published>(transfer, 200, "updateRiskGroup")).groupRevision, 5);

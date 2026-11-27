@@ -14,3 +14,9 @@ databaseChangeLog:
   - include:
       file: 005-risk-groups.sql
       relativeToChangelogFile: true
+  - include:
+      file: 006-published-risk-fields.sql
+      relativeToChangelogFile: true
+  - include:
+      file: 007-close-legacy-risk-edits.sql
+      relativeToChangelogFile: true

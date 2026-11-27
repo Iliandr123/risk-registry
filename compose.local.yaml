@@ -2,10 +2,10 @@ name: uptime-app-local
 
 services:
   db:
-    ports:
-      - "127.0.0.1:${LOCAL_DB_PORT:-5432}:5432"
+    extends:
+      file: compose.override.yaml
+      service: db
   backend:
-    environment:
-      RISK_REGISTER_SWAGGER_ENABLED: "true"
-    ports:
-      - "127.0.0.1:${LOCAL_API_PORT:-8080}:8080"
+    extends:
+      file: compose.override.yaml
+      service: backend

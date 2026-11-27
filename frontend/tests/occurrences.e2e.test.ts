@@ -87,8 +87,9 @@ test("API случаев проявления риска: хранение, па
   async function publish(path: string, proposal: Proposal) {
     await approve(path, await submit(path, proposal));
   }
-  const openDraft = (path: string, expectedPublishedVersionId: string) =>
-    author.send(`${path}/draft`, "POST", { expectedPublishedVersionId }).then((response) => read<Proposal>(response, 201));
+  const openCompletion = (path: string, expectedPublishedVersionId: string) =>
+    author.send(`${path}/draft`, "POST", { expectedPublishedVersionId, riskState: "REMOVED" })
+      .then((response) => read<Proposal>(response, 201, "openRiskDraft"));
   const saveDraft = (path: string, proposal: Proposal, fields: Schemas["DraftFields"]) =>
     author.send(`${path}/draft`, "PATCH", { ...revision(proposal), fields }).then((response) => read<Proposal>(response, 200));
   const getPublished = (path: string) => teammate.send(path).then((response) => read<Schemas["PublishedRisk"]>(response, 200));
@@ -210,21 +211,26 @@ test("API случаев проявления риска: хранение, па
   assert.deepEqual(await list(), { items: [insertedAfterFirstPage, ...remaining], nextCursor: null });
   assert.deepEqual(await history(), initialHistory);
 
-  const edit = await openDraft(path, draft.versionId);
+  await error(await author.send(`${path}/draft`, "POST", { expectedPublishedVersionId: draft.versionId }),
+    400, "INVALID_REQUEST", "openRiskDraft");
+  const closure = await openCompletion(path, draft.versionId);
+  await error(await author.send(`${path}/draft`, "PATCH", { ...revision(closure), fields: { title: "Обычная правка" } }),
+    400, "INVALID_REQUEST", "saveRiskDraft");
+  await error(await author.send(`${path}/draft/submit`, "POST", revision(closure)),
+    400, "INVALID_REQUEST", "actOnRiskDraft");
   const duringEdit = await create({ text: "Зафиксировано при открытой правке" });
   const edited = await read<Occurrence>(await patch(author, duringEdit, { url }), 200, "updateRiskOccurrence");
   const temporaryDuringEdit = await create({ text: "Запись для удаления при открытой правке" });
   assert.equal((await remove(author, temporaryDuringEdit)).status, 204);
   const beforePublish = [edited, insertedAfterFirstPage, ...remaining];
   assert.deepEqual(await listAll(), beforePublish);
-  const savedEdit = await saveDraft(path, edit, { decisionNote: "Уточнены меры" });
-  await publish(path, savedEdit);
-  assert.equal((await getPublished(path)).snapshot.versionId, edit.versionId);
-  assert.deepEqual(await listAll(), beforePublish);
-
-  const closure = await openDraft(path, edit.versionId);
   const saved = await saveDraft(path, closure, { riskState: "REMOVED", closureReason: "Приняты меры" });
   const submitted = await submit(path, saved);
+  const latest = await read<Schemas["PublishedRisk"]>(await reviewer.send(path, "PATCH", {
+    expectedPublishedVersionId: draft.versionId,
+    fields: { title: "Актуальное название", decisionNote: "Уточнены меры", likelihood: 8 },
+  }), 200, "updatePublishedRisk");
+  assert.deepEqual(await listAll(), beforePublish);
   const beforeOccurrence = await getPublished(path);
   const duringClosure = await create({ text: "Зафиксировано при согласовании завершения" });
   assert.deepEqual(await getPublished(path), beforeOccurrence);
@@ -234,14 +240,20 @@ test("API случаев проявления риска: хранение, па
   const archivedOccurrences = [closureOccurrence, insertedAfterFirstPage, ...remaining];
   assert.deepEqual(await listAll(), archivedOccurrences);
   await approve(path, submitted);
-  assert.equal((await getPublished(path)).snapshot.riskState, "REMOVED");
+  const archived = await getPublished(path);
+  assert.deepEqual(archived.snapshot, { ...latest.snapshot, versionId: closure.versionId,
+    riskState: "REMOVED", closureReason: "Приняты меры" });
+  assert.equal(archived.assessment.date, latest.assessment.date);
+  await error(await reviewer.send(path, "PATCH", {
+    expectedPublishedVersionId: archived.snapshot.versionId, fields: { title: "Архив" },
+  }), 409, "RISK_CONFLICT", "updatePublishedRisk");
   assert.deepEqual(await listAll(), archivedOccurrences);
   await error(await author.send(collection, "POST", { text }), 409, "RISK_CONFLICT", "createRiskOccurrence");
   await error(await patch(reviewer, linkOnly, { text }), 409, "RISK_CONFLICT", "updateRiskOccurrence");
   await error(await remove(admin, linkOnly), 409, "RISK_CONFLICT", "deleteRiskOccurrence");
   assert.deepEqual(await listAll(), archivedOccurrences);
 
-  const emptyClosure = await openDraft(otherPath, otherDraft.versionId);
+  const emptyClosure = await openCompletion(otherPath, otherDraft.versionId);
   assert.deepEqual(await read<Page>(await teammate.send(`${otherPath}/occurrences`), 200, "listRiskOccurrences"),
     { items: [], nextCursor: null });
   await publish(otherPath, await saveDraft(otherPath, emptyClosure, {

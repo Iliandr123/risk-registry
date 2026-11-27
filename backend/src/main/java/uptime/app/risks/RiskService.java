@@ -2,9 +2,11 @@ package uptime.app.risks;
 
 import java.text.Collator;
 import java.time.LocalDate;
+import java.time.ZoneOffset;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Objects;
 import java.util.UUID;
 import java.util.function.Function;
@@ -24,6 +26,7 @@ import uptime.app.risks.RiskResponses.Assessment;
 import uptime.app.risks.RiskResponses.AssignmentEvent;
 import uptime.app.risks.RiskResponses.Category;
 import uptime.app.risks.RiskResponses.Event;
+import uptime.app.risks.RiskResponses.FieldsUpdatedEvent;
 import uptime.app.risks.RiskResponses.FirstProposalFields;
 import uptime.app.risks.RiskResponses.FirstPublicationEvent;
 import uptime.app.risks.RiskResponses.GroupEvent;
@@ -78,6 +81,24 @@ class RiskService {
     }
 
     Published published(Member member, UUID id) {
+        return published(member, risk(id, false));
+    }
+
+    @Transactional
+    Published updatePublished(Member member, UUID id, UUID expectedSnapshot, JsonNode input) {
+        Risk risk = risk(id, true);
+        requirePublished(risk);
+        if (!member.reviewer() && !member.admin() && !member.id().equals(risk.assigneeId())) {
+            throw ApiProblem.forbidden();
+        }
+        DraftFields previous = requireActiveSnapshot(risk, expectedSnapshot).fields();
+        DraftFields fields = previous.mergePublished(input);
+        if (fields.equals(previous)) {
+            return published(member, risk);
+        }
+        var now = calendar.now();
+        UUID updatedId = store.insertPublishedEdit(risk, member.id(), fields, now);
+        publishEdit(risk, updatedId, previous, fields, now.toLocalDate());
         return published(member, risk(id, false));
     }
 
@@ -136,35 +157,43 @@ class RiskService {
             throw ApiProblem.notFound();
         }
         var events = store.events(id);
-        var snapshots = events.stream().filter(event -> event.action() == EventAction.APPROVE)
+        var snapshots = events.stream()
+                .filter(event -> event.action() == EventAction.APPROVE || event.action() == EventAction.FIELDS_UPDATED)
                 .map(event -> versions.get(event.versionId()))
                 .map(version -> new HistoricalSnapshot(snapshot(version), account(version.historicalOwnerId())))
                 .toList();
         var visibleEvents = events.stream()
                 .filter(event -> event.action() == EventAction.APPROVE || event.action() == EventAction.CONFIRM_ASSESSMENT
                         || event.action().isAssignment() || event.action() == EventAction.GROUP_CHANGED
+                        || event.action() == EventAction.FIELDS_UPDATED
                         || versions.get(event.versionId()).visibleTo(member))
-                .map(this::historyEvent).toList();
-        return new History(id, snapshots, visibleEvents);
+                .toList();
+        var closedProposals = visibleEvents.stream()
+                .filter(event -> event.action() == EventAction.EDIT_CLOSED_BY_MIGRATION)
+                .map(event -> proposal(versions.get(event.versionId()), risk))
+                .toList();
+        return new History(id, snapshots, visibleEvents.stream().map(event -> historyEvent(event, versions)).toList(),
+                closedProposals);
     }
 
     @Transactional
     Proposal create(Member member, JsonNode input) {
         DraftFields fields = DraftFields.initial().merge(input);
-        UUID groupId = proposalGroup(input, null, false);
+        UUID groupId = proposalGroup(input, null);
         var risk = new Risk(UUID.randomUUID(), null, null, null, 1, null, 1);
         store.insertRisk(risk.id());
         return proposal(store.insertDraft(risk.id(), member.id(), fields, groupId), risk);
     }
 
     @Transactional
-    Proposal open(Member member, UUID id, UUID expectedSnapshot) {
+    Proposal open(Member member, UUID id, UUID expectedSnapshot, DraftFields completion) {
         Risk risk = risk(id, true);
         RiskVersion current = requireActiveSnapshot(risk, expectedSnapshot);
         if (store.draft(id).isPresent()) {
             throw conflict();
         }
-        return proposal(store.insertDraft(id, member.id(), current.fields(), null), risk);
+        DraftFields fields = current.fields().withCompletion(completion.riskState(), completion.closureReason());
+        return proposal(store.insertDraft(id, member.id(), fields, null), risk);
     }
 
     @Transactional
@@ -176,18 +205,15 @@ class RiskService {
         if (!version.editable()) {
             throw conflict();
         }
-        DraftFields fields = version.fields().merge(input);
-        UUID groupId = proposalGroup(input, version.proposedGroupId(), risk.published());
+        DraftFields fields = risk.published() ? version.fields().mergeCompletion(input) : version.fields().merge(input);
+        UUID groupId = risk.published() ? version.proposedGroupId() : proposalGroup(input, version.proposedGroupId());
         boolean unchanged = fields.equals(version.fields()) && Objects.equals(groupId, version.proposedGroupId());
         return proposal(unchanged ? version : store.save(version, fields, groupId), risk);
     }
 
-    private UUID proposalGroup(JsonNode input, UUID previous, boolean published) {
+    private UUID proposalGroup(JsonNode input, UUID previous) {
         if (!input.has("groupId")) {
             return previous;
-        }
-        if (published) {
-            throw ApiProblem.invalidRequest();
         }
         UUID groupId = RiskController.nullableRequestId(input, "groupId");
         if (groupId != null && groups.find(groupId).isEmpty()) {
@@ -222,7 +248,12 @@ class RiskService {
         Status target = switch (action) {
             case SUBMIT -> {
                 requireTransition(version.editable());
-                version.fields().requireComplete();
+                if (risk.published() || version.fields().riskState() != RiskState.ACTIVE) {
+                    version.fields().requireCompletion();
+                }
+                if (!risk.published()) {
+                    version.fields().requireComplete();
+                }
                 yield Status.IN_REVIEW;
             }
             case RETURN -> {
@@ -243,22 +274,29 @@ class RiskService {
                 requireComment(comment);
                 yield Status.CLOSED;
             }
-            case CONFIRM_ASSESSMENT, ASSIGNMENT_CHANGED, ASSIGNMENT_MIGRATED, GROUP_CHANGED ->
+            case CONFIRM_ASSESSMENT, ASSIGNMENT_CHANGED, ASSIGNMENT_MIGRATED, GROUP_CHANGED, FIELDS_UPDATED,
+                    EDIT_CLOSED_BY_MIGRATION ->
                     throw new IllegalArgumentException("Expected a proposal action");
         };
-        RiskVersion updated = store.transition(version, target);
+        DraftFields fields = version.fields();
         if (target == Status.APPROVED) {
-            var fields = version.fields();
-            if (fields.riskState() != RiskState.ACTIVE && DraftFields.blank(fields.closureReason())) {
-                throw new ApiProblem(400, "INVALID_REQUEST", "Укажите причину завершения риска.");
+            if (risk.published() || fields.riskState() != RiskState.ACTIVE) {
+                fields.requireCompletion();
             }
+            if (risk.published()) {
+                DraftFields latest = requireActiveSnapshot(risk, risk.publishedVersionId()).fields();
+                fields = latest.withCompletion(fields.riskState(), fields.closureReason());
+            }
+        }
+        RiskVersion updated = store.transition(version, target, fields);
+        if (target == Status.APPROVED) {
             if (!risk.published()) {
                 UUID groupId = version.proposedGroupId();
                 String groupName = groupId == null ? null : groups.lockForHistory(groupId).get(groupId).name();
                 store.publishFirst(version, member.id(), now, comment, groupName);
                 return new Identity(updated);
             }
-            approveEdit(risk, version, now.toLocalDate());
+            store.publish(id, updated.id(), risk.assessmentDate());
         }
         store.append(id, versionId, member.id(), action, now, comment);
         return new Identity(updated);
@@ -319,12 +357,8 @@ class RiskService {
         return published(member, risk(id, false));
     }
 
-    private void approveEdit(Risk risk, RiskVersion version, LocalDate today) {
-        DraftFields fields = version.fields();
-        DraftFields previous = version(risk, risk.publishedVersionId()).fields();
-        boolean reassessed = !fields.likelihood().equals(previous.likelihood())
-                || !fields.impact().equals(previous.impact());
-        store.publish(risk.id(), version.id(), reassessed ? today : risk.assessmentDate());
+    private void publishEdit(Risk risk, UUID versionId, DraftFields previous, DraftFields fields, LocalDate today) {
+        store.publish(risk.id(), versionId, Assessment.dateAfterEdit(risk.assessmentDate(), today, previous, fields));
     }
 
     private RiskVersion requireActiveSnapshot(Risk risk, UUID expected) {
@@ -409,8 +443,14 @@ class RiskService {
         return id == null ? null : new Participant(id, account(id).displayName());
     }
 
-    private Event historyEvent(RiskStore.Event event) {
+    private Event historyEvent(RiskStore.Event event, Map<UUID, RiskVersion> versions) {
         Participant actor = participant(event.actorId());
+        if (event.action() == EventAction.FIELDS_UPDATED) {
+            DraftFields previous = versions.get(event.previousVersionId()).fields();
+            DraftFields current = versions.get(event.versionId()).fields();
+            return new FieldsUpdatedEvent(event.versionId(), actor, event.action(),
+                    event.occurredAt().withOffsetSameInstant(ZoneOffset.UTC), current.changesFrom(previous));
+        }
         if (event.action().isAssignment()) {
             return new AssignmentEvent(event.versionId(), actor, event.action(), event.occurredAt(),
                     participant(event.previousAssigneeId()), participant(event.newAssigneeId()));

@@ -69,6 +69,14 @@ class RiskController {
         return risks.published(member, pathId(id));
     }
 
+    @PatchMapping("/{id}")
+    Published updatePublished(@RequestAttribute(MEMBER) Member member, @PathVariable("id") String id,
+                              @RequestBody JsonNode body) {
+        requireObject(body, Set.of("expectedPublishedVersionId", "fields"));
+        return risks.updatePublished(member, pathId(id), requestId(body, "expectedPublishedVersionId"),
+                body.get("fields"));
+    }
+
     @GetMapping("/{id}/occurrences")
     RiskOccurrence.Page occurrences(@PathVariable("id") String id,
                                     @RequestParam(name = "cursor", required = false) String cursor) {
@@ -138,7 +146,9 @@ class RiskController {
     @ResponseStatus(HttpStatus.CREATED)
     Proposal open(@RequestAttribute(MEMBER) Member member, @PathVariable("id") String id,
                   @RequestBody JsonNode body) {
-        return risks.open(member, pathId(id), expectedSnapshot(body));
+        requireObject(body, Set.of("expectedPublishedVersionId", "riskState", "closureReason"));
+        DraftFields completion = DraftFields.initial().withCompletionFields(body);
+        return risks.open(member, pathId(id), requestId(body, "expectedPublishedVersionId"), completion);
     }
 
     @PatchMapping("/{id}/draft")

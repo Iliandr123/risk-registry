@@ -1,4 +1,5 @@
-import type { Assignee, Category, Fields, Priority, ProposalStatus, PublishedRisk, RiskState } from "./api";
+import { useId } from "react";
+import type { Assignee, Category, CompletionFields, Fields, Priority, ProposalStatus, PublishedRisk, RiskState } from "./api";
 
 export const categories: Record<Category, string> = { LOW: "Низкий", MEDIUM: "Средний", HIGH: "Высокий" };
 export const riskStates: Record<RiskState, string> = { ACTIVE: "Активен", REMOVED: "Снят", MATERIALIZED: "Реализовался" };
@@ -60,11 +61,32 @@ export function FieldDetails({ fields, owner, priority }: {
   </div>;
 }
 
-export function FieldEditor({ fields, setFields, allowClosure }: {
+export function CompletionEditor({ fields, onChange }: {
+  fields: CompletionFields; onChange: (fields: CompletionFields) => void;
+}) {
+  return <>
+    <label>Состояние риска
+      <select value={fields.riskState} onChange={(event) => onChange({
+        ...fields, riskState: event.target.value === "REMOVED" ? "REMOVED" : "MATERIALIZED",
+      })}>
+        <option value="REMOVED">{riskStates.REMOVED}</option>
+        <option value="MATERIALIZED">{riskStates.MATERIALIZED}</option>
+      </select>
+    </label>
+    <label>Причина завершения *
+      <textarea rows={2} value={fields.closureReason ?? ""} onChange={(event) => onChange({
+        ...fields, closureReason: event.target.value || null,
+      })} />
+    </label>
+  </>;
+}
+
+export function FieldEditor({ fields, setFields, published = false }: {
   fields: Fields;
   setFields: (fields: Fields) => void;
-  allowClosure: boolean;
+  published?: boolean;
 }) {
+  const id = useId();
   const [likelihood, impact] = [fields.likelihood, fields.impact];
   const priority = previewPriority({ likelihood, impact });
 
@@ -75,39 +97,41 @@ export function FieldEditor({ fields, setFields, allowClosure }: {
   }
 
   function scoreInput(key: "likelihood" | "impact", description: string) {
-    return <input type="number" min={1} max={10} step={1} value={fields[key] ?? ""} aria-describedby={description}
+    return <input type="number" required={published} min={1} max={10} step={1} value={fields[key] ?? ""} aria-describedby={description}
       onChange={(event) => setFields({ ...fields, [key]: event.target.value === "" ? null : event.target.valueAsNumber })} />;
   }
 
   return <>
-    <p className="muted">Поля со звёздочкой нужны для отправки на ревью. Черновик можно сохранить частично.</p>
-    <label>Название *<input {...textInput("title")} /></label>
-    {textFields.map(([key, label]) => <label key={key}><span id={key}>{label} *</span>
-      <textarea aria-labelledby={key} rows={2} {...textInput(key)} /></label>)}
+    {!published && <p className="muted">Поля со звёздочкой нужны для отправки на ревью. Черновик можно сохранить частично.</p>}
+    <label>Название *<input required={published} {...textInput("title")} /></label>
+    {textFields.map(([key, label]) => <label key={key}><span id={id + key}>{label} *</span>
+      <textarea aria-labelledby={id + key} required={published} rows={2} {...textInput(key)} /></label>)}
     <div className="form-grid">
       <div className="stack">
-        <label>Вероятность *{scoreInput("likelihood", "likelihood-guide")}</label>
-        <small id="likelihood-guide">На ближайшие три месяца. 1 ≈ 10%, 5 ≈ 50%, 10 ≈ 100%.</small>
+        <label>Вероятность *{scoreInput("likelihood", id + "-likelihood-guide")}</label>
+        <small id={id + "-likelihood-guide"}>На ближайшие три месяца. 1 ≈ 10%, 5 ≈ 50%, 10 ≈ 100%.</small>
       </div>
       <div className="stack">
-        <label>Влияние *{scoreInput("impact", "impact-guide")}</label>
-        <small id="impact-guide">1 — единичное неудобство, 3 — ограниченное ухудшение, 5 — существенное ухудшение ключевого сценария,
+        <label>Влияние *{scoreInput("impact", id + "-impact-guide")}</label>
+        <small id={id + "-impact-guide"}>1 — единичное неудобство, 3 — ограниченное ухудшение, 5 — существенное ухудшение ключевого сценария,
           7 — недоступность ключевого сценария для многих, 10 — угроза жизнеспособности продукта.</small>
       </div>
     </div>
     <p className="muted">Учитывайте действующие меры. Запланированные меры учитываются после внедрения.</p>
     {priority && <p><PriorityBadge priority={priority} /></p>}
-    <label><span id="decision-note">Решение и меры</span>
-      <textarea aria-labelledby="decision-note" rows={3} {...textInput("decisionNote")} /></label>
+    <label><span id={id + "-decision-note"}>Решение и меры</span>
+      <textarea aria-labelledby={id + "-decision-note"} rows={3} {...textInput("decisionNote")} /></label>
     <label>Ссылка на трекер<input type="url" {...textInput("trackerUrl")} /></label>
-    <label><span id="draft-state">Состояние риска</span><select aria-labelledby="draft-state" value={fields.riskState} onChange={(event) => {
-      const riskState = event.target.value as RiskState;
-      setFields({ ...fields, riskState, closureReason: riskState === "ACTIVE" ? null : fields.closureReason });
-    }}>
-      {Object.entries(riskStates).filter(([value]) => allowClosure || value === "ACTIVE" || value === fields.riskState)
-        .map(([value, label]) => <option key={value} value={value}>{label}</option>)}
-    </select></label>
-    {fields.riskState !== "ACTIVE" && <label><span id="closure-reason">Причина завершения *</span>
-      <textarea aria-labelledby="closure-reason" rows={2} {...textInput("closureReason")} /></label>}
+    {!published && <>
+      <label><span id="draft-state">Состояние риска</span><select aria-labelledby="draft-state" value={fields.riskState} onChange={(event) => {
+        const riskState = event.target.value as RiskState;
+        setFields({ ...fields, riskState, closureReason: riskState === "ACTIVE" ? null : fields.closureReason });
+      }}>
+        {Object.entries(riskStates).filter(([value]) => value === "ACTIVE" || value === fields.riskState)
+          .map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+      </select></label>
+      {fields.riskState !== "ACTIVE" && <label><span id="closure-reason">Причина завершения *</span>
+        <textarea aria-labelledby="closure-reason" rows={2} {...textInput("closureReason")} /></label>}
+    </>}
   </>;
 }

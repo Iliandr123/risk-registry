@@ -14,11 +14,14 @@ export type Category = Schemas["Category"];
 export type RiskState = Schemas["RiskState"];
 export type ProposalStatus = Schemas["ProposalStatus"];
 export type DraftAction = operations["actOnRiskDraft"]["parameters"]["path"]["action"];
+export type CompletionState = Schemas["RiskCompletionState"];
+export type CompletionFields = Required<Schemas["RiskCompletionFields"]>;
 export type Fields = Schemas["ProposalFields"];
 export type Identity = Schemas["DraftActionResult"];
 export type Proposal = Schemas["Proposal"];
 export type Priority = Schemas["Priority"];
 export type Assignee = Schemas["Assignee"];
+export type PublishedRiskUpdate = Body<"updatePublishedRisk">;
 export type PublishedRisk = Schemas["PublishedRisk"];
 export type RiskHistory = Schemas["RiskHistory"];
 export type RiskGroup = Schemas["RiskGroup"];
@@ -98,6 +101,8 @@ export function createApi(onSessionEnded: () => void, transport: (path: string, 
     risks: (query: URLSearchParams, signal?: AbortSignal) =>
       request<RiskList>(`/risks?${query}`, "GET", undefined, signal),
     risk: (id: string) => request<PublishedRisk>(riskPath(id)),
+    updatePublished: (id: string, update: PublishedRiskUpdate) =>
+      request<PublishedRisk>(riskPath(id), "PATCH", update),
     assign: (id: string, assignment: Body<"updateRiskAssignment">) =>
       request<PublishedRisk>(`${riskPath(id)}/assignment`, "PATCH", assignment),
     changeGroup: (id: string, group: Body<"updateRiskGroup">) =>
@@ -114,9 +119,9 @@ export function createApi(onSessionEnded: () => void, transport: (path: string, 
       request<void>(`${occurrencePath(id, occurrence.id)}?expectedRevision=${occurrence.revision}`, "DELETE"),
     draft: (id: string) => request<Proposal>(`${riskPath(id)}/draft`),
     createRisk: () => request<Proposal>("/risks", "POST", {}),
-    openDraft: (id: string, expectedPublishedVersionId: string) =>
-      request<Proposal>(`${riskPath(id)}/draft`, "POST", { expectedPublishedVersionId } satisfies Body<"openRiskDraft">),
-    saveDraft: ({ riskId, versionId, revision }: Proposal, fields: Fields) =>
+    openCompletion: (id: string, input: Body<"openRiskDraft">) =>
+      request<Proposal>(`${riskPath(id)}/draft`, "POST", input),
+    saveDraft: ({ riskId, versionId, revision }: Proposal, fields: Fields | CompletionFields) =>
       request<Proposal>(`${riskPath(riskId)}/draft`, "PATCH", { versionId, expectedRevision: revision, fields } satisfies Body<"saveRiskDraft">),
     act: (id: string, { versionId, revision }: Version, action: DraftAction, comment?: string) =>
       request<Identity>(`${riskPath(id)}/draft/${action}`, "POST", { versionId, expectedRevision: revision, comment } satisfies Body<"actOnRiskDraft">),

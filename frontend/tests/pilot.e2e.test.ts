@@ -161,22 +161,28 @@ test("рабочий пилот: первый вход, роли, отзыв с�
     if (process.env.PILOT_SCREENSHOT) await author.screenshot({ path: process.env.PILOT_SCREENSHOT, fullPage: true });
     await link(author, title).click();
     await text(author, note).first().waitFor();
-    await button(author, "Предложить правку").click();
-    await author.getByLabel("Решение и меры", { exact: true }).waitFor();
+    const mitigation = "Установлена автоматическая сортировка заявок.";
+    await button(author, "Редактировать").click();
+    await author.getByLabel("Решение и меры", { exact: true }).fill(mitigation);
+    await button(author, "Сохранить изменения").click();
+    await text(author, "Изменения опубликованы.").waitFor();
+    await text(author, `${note} → ${mitigation}`).waitFor();
     const occurrences = (page: Page) => page.getByRole("region", { name: "Случаи проявления риска" });
     const occurrence = "Сортировка заявок заняла два дня.";
     await button(occurrences(author), "Добавить случай").click();
     await occurrences(author).getByLabel("Описание случая").fill(occurrence);
     await button(occurrences(author), "Сохранить случай").click();
     await text(occurrences(author), occurrence).waitFor();
-    await author.getByLabel("Решение и меры", { exact: true }).fill("Установлена автоматическая сортировка заявок.");
+    await button(author, "Завершить риск").click();
     await author.getByLabel("Состояние риска").selectOption("REMOVED");
     await author.getByLabel("Причина завершения *", { exact: true }).fill("Ручная очередь устранена.");
+    assert.equal(await author.getByLabel("Название *", { exact: true }).count(), 0);
+    await button(author, "Создать черновик завершения").click();
     await button(author, "Отправить на ревью").click();
     await text(author, "Предложение отправлено на ревью.").waitFor();
     await openListedRisk(reviewer, "Активные риски", title);
     await text(reviewer, "Опубликованная версия").waitFor();
-    await text(reviewer, note).first().waitFor();
+    await text(reviewer, mitigation).first().waitFor();
     await button(reviewer, "Подтвердить оценку").click();
     await text(reviewer, "Оценка подтверждена.").waitFor();
     await openListedRisk(reviewer, "На ревью", title);
@@ -185,11 +191,16 @@ test("рабочий пилот: первый вход, роли, отзыв с�
     await button(reviewer, "Утвердить").click();
     await text(reviewer, "Версия утверждена.").waitFor();
     await openListedRisk(author, "Архив", title);
+    await text(author, mitigation).first().waitFor();
+    await text(author, authorName).first().waitFor();
     await text(occurrences(author), occurrence).waitFor();
     assert.equal(await occurrences(author).getByRole("button", { name: /Добавить случай|Исправить|Удалить/ }).count(), 0);
     await text(author, "Ручная очередь устранена.").first().waitFor();
     await author.locator("summary").filter({ hasText: `Версия 1 · ${title}` }).click();
     await text(author.locator("details[open]"), note).waitFor();
+    if (process.env.PILOT_COMPLETION_SCREENSHOT) {
+      await author.screenshot({ path: process.env.PILOT_COMPLETION_SCREENSHOT, fullPage: true });
+    }
 
     await link(admin, "Участники").click();
     await reviewerAccount.getByLabel("Активен", { exact: true }).uncheck();

@@ -143,6 +143,89 @@ test("компоненты пилота через сервер Next.js и ко�
     assert.doesNotMatch(html, /Изменить назначение/);
   });
 
+  await t.test("прямое сохранение сохраняет ввод при ошибке и сверяет изменения с текущей версией", async () => {
+    const browser = await chromium.launch({ channel: process.env.PILOT_BROWSER ?? "chrome" });
+    try {
+      const page = await signedInPage(browser);
+      const query = { view: "active", q: "заявок" };
+      const assigned = { ...published, assignee };
+      const current = { ...assigned, snapshot: { ...assigned.snapshot,
+        versionId: "aaaaaaaa-1111-4111-8111-111111111111", title: "Текущее название заявок",
+        decisionNote: "Текущая мера", cause: "Уточнённая причина" } };
+      const updated = { ...current, snapshot: { ...current.snapshot,
+        versionId: "bbbbbbbb-1111-4111-8111-111111111111", title: "Уточнена обработка заявок" } };
+      const journal: RiskHistory = { ...history, events: [{
+        action: "FIELDS_UPDATED", actor: participant, occurredAt, versionId: updated.snapshot.versionId,
+        changes: [{ field: "title", previousValue: current.snapshot.title, newValue: updated.snapshot.title }],
+      }] };
+      const patch = (body: unknown, status: number, reply: unknown): Exchange[] => [
+        { operation: "getCsrfToken", cookie, status: 200, reply: { token: "published-edit-csrf" } },
+        { operation: "updatePublishedRisk", path, cookie, csrf: "published-edit-csrf", body, status, reply },
+      ];
+      backend.expect([...pageExchanges(account, list, query), ...cardExchanges(assigned, null, history)]);
+      await page.goto(`${base}/?${new URLSearchParams({ ...query, risk: riskId })}`);
+      await page.getByRole("button", { name: "Редактировать", exact: true }).click();
+      const form = page.getByRole("form", { name: "Редактирование опубликованного риска" });
+      const name = form.getByLabel("Название *", { exact: true });
+      const note = form.getByLabel("Решение и меры");
+      const save = form.getByRole("button", { name: "Сохранить изменения" });
+      await name.fill(updated.snapshot.title);
+      await note.fill("Мой вариант меры");
+      const originalRequest = { expectedPublishedVersionId: versionId,
+        fields: { title: updated.snapshot.title, decisionNote: "Мой вариант меры" } };
+      backend.expect(patch(originalRequest, 400, { code: "INVALID_REQUEST", message: "Проверьте поля риска." }));
+      await save.click();
+      await form.getByRole("alert").getByText("Проверьте поля риска.").waitFor();
+      assert.equal(await name.inputValue(), updated.snapshot.title);
+      assert.equal(await note.inputValue(), "Мой вариант меры");
+
+      backend.expect([
+        ...patch(originalRequest, 409, { code: "RISK_CONFLICT", message: "Версия изменилась." }),
+        { operation: "getRisk", path, cookie, status: 200, reply: current },
+      ]);
+      await save.click();
+      const comparison = form.getByRole("region", { name: "Сверка полей" });
+      await comparison.getByText("Текущее значение · Текущая мера").waitFor();
+      await comparison.getByText("Ваш ввод · Мой вариант меры").waitFor();
+      assert.equal(await name.inputValue(), updated.snapshot.title);
+      assert.equal(await save.isDisabled(), true);
+      assert.equal(await form.getByLabel("Причина *", { exact: true }).inputValue(), current.snapshot.cause);
+      const screenshots = process.env.PILOT_PUBLISHED_SCREENSHOTS;
+      if (screenshots) {
+        await mkdir(screenshots, { recursive: true });
+        await page.screenshot({ path: join(screenshots, "published-conflict.png"), fullPage: true });
+      }
+      await comparison.locator("dl > div").filter({ hasText: "Решение и меры" })
+        .getByRole("button", { name: "Взять текущее значение" }).click();
+      assert.equal(await note.inputValue(), "Текущая мера");
+      await form.getByRole("button", { name: "Подтвердить сверку" }).click();
+      backend.expect([
+        ...patch({ expectedPublishedVersionId: current.snapshot.versionId, fields: { title: updated.snapshot.title } }, 200, updated),
+        { operation: "getRiskHistory", path, cookie, status: 200, reply: journal },
+        { operation: "listParticipants", cookie, status: 200, reply: [participant] },
+        { operation: "listRisks", query, cookie, status: 200, reply: {
+          ...list, items: [{ ...summary, title: updated.snapshot.title, publishedVersionId: updated.snapshot.versionId }],
+        } },
+      ]);
+      await save.click();
+      await page.getByRole("heading", { name: updated.snapshot.title, exact: true }).waitFor();
+      await page.getByText(`${current.snapshot.title} → ${updated.snapshot.title}`, { exact: true }).waitFor();
+      assert.equal(await form.count(), 0);
+      assert.equal(new URL(page.url()).searchParams.get("q"), query.q);
+      backend.assertComplete();
+      if (screenshots) await page.screenshot({ path: join(screenshots, "published-history.png"), fullPage: true });
+      const updatedList = { ...list,
+        items: [{ ...summary, title: updated.snapshot.title, publishedVersionId: updated.snapshot.versionId }] };
+      backend.expect(pageExchanges(account, updatedList, query));
+      await page.getByRole("link", { name: "← К списку" }).click();
+      await page.getByRole("link", { name: updated.snapshot.title, exact: true }).waitFor();
+      assert.equal(new URL(page.url()).searchParams.get("q"), query.q);
+      backend.assertComplete();
+    } finally {
+      await browser.close();
+    }
+  });
+
   await t.test("первая страница случаев доступна в HTML, следующая загружается по курсору", async () => {
     const cursor = "older+page/2=";
     const opening = [...pageExchanges(account, list),

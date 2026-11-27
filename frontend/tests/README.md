@@ -15,8 +15,8 @@ npm run test:components
 Поднимите отдельный стенд с PostgreSQL и Spring Boot. Чтобы не использовать том рабочего пилота, выполните из корня проекта:
 
 ```sh
-docker compose -p pilot-e2e up --build --wait
-docker compose -p pilot-e2e run --rm backend bootstrap-admin operator "Администратор E2E"
+docker compose -p pilot-e2e -f compose.yaml up --build --wait
+docker compose -p pilot-e2e -f compose.yaml run --rm backend bootstrap-admin operator "Администратор E2E"
 ```
 
 Если порт уже занят, задайте для Compose другой `PILOT_PORT`. Укажите `PILOT_UI_URL` с соответствующим адресом `http://localhost:<порт>`. По умолчанию тест использует `http://localhost:3000`.
@@ -32,7 +32,7 @@ npm run test:e2e
 Для прямого подключения к Spring Boot задайте `PILOT_API_URL` и укажите действующий
 постоянный пароль тестового администратора без роли ревьюера в `PILOT_ADMIN_PASSWORD`.
 
-Для остановки выполните из корня `docker compose -p pilot-e2e down`. Том с тестовыми записями сохраняется.
+Для остановки выполните из корня `docker compose -p pilot-e2e -f compose.yaml down`. Том с тестовыми записями сохраняется.
 
 ## Ручная приёмка учебного прототипа
 

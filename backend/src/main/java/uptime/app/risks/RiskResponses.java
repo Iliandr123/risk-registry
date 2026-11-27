@@ -5,6 +5,7 @@ import com.fasterxml.jackson.annotation.JsonUnwrapped;
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.util.List;
+import java.util.Objects;
 import java.util.UUID;
 import uptime.app.accounts.AccountDirectory;
 import uptime.app.risks.DraftFields.RiskState;
@@ -44,6 +45,12 @@ final class RiskResponses {
     }
 
     record Assessment(LocalDate date, LocalDate reviewDueDate, boolean reviewRequired) {
+        static LocalDate dateAfterEdit(LocalDate current, LocalDate today, DraftFields previous, DraftFields edited) {
+            boolean changed = !Objects.equals(edited.likelihood(), previous.likelihood())
+                    || !Objects.equals(edited.impact(), previous.impact());
+            return changed ? today : current;
+        }
+
         static Assessment from(LocalDate date, RiskState state, LocalDate today) {
             LocalDate due = date.plusMonths(3);
             return new Assessment(date, due, state == RiskState.ACTIVE && !today.isBefore(due));
@@ -73,11 +80,17 @@ final class RiskResponses {
 
     record FirstPublicationEvent(@JsonUnwrapped WorkflowEvent event, String initialGroupName) implements Event {}
 
+    record FieldChange(String field, Object previousValue, Object newValue) {}
+
+    record FieldsUpdatedEvent(UUID versionId, Participant actor, EventAction action, OffsetDateTime occurredAt,
+                              List<FieldChange> changes) implements Event {}
+
     record GroupEvent(UUID versionId, Participant actor, EventAction action, OffsetDateTime occurredAt,
                       String previousGroupName, String newGroupName) implements Event {}
 
     record AssignmentEvent(UUID versionId, Participant actor, EventAction action, OffsetDateTime occurredAt,
                            Participant previousAssignee, Participant newAssignee) implements Event {}
 
-    record History(UUID riskId, List<HistoricalSnapshot> publishedVersions, List<Event> events) {}
+    record History(UUID riskId, List<HistoricalSnapshot> publishedVersions, List<Event> events,
+                   @JsonInclude(JsonInclude.Include.NON_EMPTY) List<Proposal> closedProposals) {}
 }
