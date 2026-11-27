@@ -1,12 +1,13 @@
 import assert from "node:assert/strict";
 import { once } from "node:events";
+import { mkdir } from "node:fs/promises";
 import { createServer } from "node:http";
 import { join } from "node:path";
 import { test } from "node:test";
 import next from "next";
 import { chromium, type Browser } from "playwright-core";
 import type {
-  Account, Proposal, PublishedRisk, RiskHistory, RiskList, RiskOccurrence, RiskOccurrencePage,
+  Account, Proposal, PublishedRisk, RiskGroup, RiskHistory, RiskList, RiskOccurrence, RiskOccurrencePage,
 } from "../src/app/api";
 import { contractBackend, type Exchange } from "./contract-backend.ts";
 
@@ -18,12 +19,15 @@ const title = "Задержка обработки заявок";
 const participant = { id: authorId, displayName: "Автор первого предложения" };
 const assignee = { ...participant, active: true };
 const replacement = { id: "44444444-4444-4444-8444-444444444444", displayName: "Другой участник" };
+const payments = { id: "88888888-8888-4888-8888-888888888888", name: "Оплаты" };
+const signIn = { id: "99999999-9999-4999-8999-999999999999", name: "Аутентификация" };
 const disabledAssignee = { ...replacement, active: false };
 const account: Account = {
   ...assignee, login: "author", isAdmin: false, isReviewer: false, mustChangePassword: false,
 };
 const published: PublishedRisk = {
   riskId, hasOpenDraft: false, author: participant, assignee: null, assignmentRevision: 1,
+  group: null, groupRevision: 1,
   snapshot: {
     versionId, title, likelihood: 4, impact: 10,
     priority: { score: 40, category: "HIGH", criticalImpact: true },
@@ -33,7 +37,7 @@ const published: PublishedRisk = {
   assessment: { date: "2026-03-31", reviewDueDate: "2026-06-30", reviewRequired: true },
 };
 const summary = {
-  riskId, publishedVersionId: versionId, title, assignee: null, likelihood: 4, impact: 10,
+  riskId, publishedVersionId: versionId, title, assignee: null, group: null, likelihood: 4, impact: 10,
   riskState: "ACTIVE", priority: published.snapshot.priority, assessment: published.assessment, hasOpenDraft: false,
 } as const;
 const list: RiskList = {
@@ -45,7 +49,7 @@ const firstProposal: Proposal = {
   fields: {
     title, likelihood: 4, impact: 10, riskState: "ACTIVE", cause: "Ручные операции",
     possibleEvent: "Очередь растёт", productConsequences: "Клиенты ждут ответа",
-    trackerUrl: null, decisionNote: null, closureReason: null,
+    trackerUrl: null, decisionNote: null, closureReason: null, groupId: null,
   },
 };
 const history: RiskHistory = { riskId, publishedVersions: [{ ...published.snapshot, owner: null }], events: [] };
@@ -77,11 +81,12 @@ function cardExchanges(card: PublishedRisk | null, draft: Proposal | null, journ
 }
 
 function pageExchanges(profile: Account, result: RiskList, query: Record<string, string> = { view: result.view },
-  people = [participant]): Exchange[] {
+  people = [participant], groups: RiskGroup[] = []): Exchange[] {
   return [
     { operation: "getProfile", cookie, status: 200, reply: profile },
     { operation: "listRisks", query, cookie, status: 200, reply: result },
     { operation: "listParticipants", cookie, status: 200, reply: people },
+    { operation: "listRiskGroups", cookie, status: 200, reply: groups },
   ];
 }
 
@@ -109,6 +114,13 @@ test("компоненты пилота через сервер Next.js и ко�
     await page.context().addCookies([{ url: "https://localhost/", name: "__Host-risk_session", value: "mock-session",
       secure: true, httpOnly: true, sameSite: "Lax" }]);
     return page;
+  }
+
+  async function groupScreenshot(page: Awaited<ReturnType<typeof signedInPage>>, name: string) {
+    const directory = process.env.PILOT_GROUP_SCREENSHOTS;
+    if (!directory) return;
+    await mkdir(directory, { recursive: true });
+    await page.screenshot({ path: join(directory, name), fullPage: true });
   }
 
   await t.test("сервер показывает фильтры и карточку в HTML без выполнения JavaScript", async () => {
@@ -370,6 +382,7 @@ test("компоненты пилота через сервер Next.js и ко�
       { operation: "getProfile", cookie, status: 200, reply: account },
       { operation: "listRisks", query: { view: "active" }, cookie, status: 200, reply: list },
       { operation: "listParticipants", cookie, status: 200, reply: [participant] },
+      { operation: "listRiskGroups", cookie, status: 200, reply: [] },
     ]);
     const browser = await chromium.launch({ channel: process.env.PILOT_BROWSER ?? "chrome" });
     try {
@@ -402,6 +415,7 @@ test("компоненты пилота через сервер Next.js и ко�
       { operation: "listRisks", query: { view: "review" }, cookie, status: 200,
         reply: { view: "review", items: [proposal] } },
       { operation: "listParticipants", cookie, status: 200, reply: [participant] },
+      { operation: "listRiskGroups", cookie, status: 200, reply: [] },
       { operation: "getRisk", path: { id: riskId }, cookie, status: 404,
         reply: { code: "NOT_FOUND", message: "Карточка не найдена." } },
       { operation: "getRiskDraft", path: { id: riskId }, cookie, status: 200, reply: proposal },
@@ -417,6 +431,7 @@ test("компоненты пилота через сервер Next.js и ко�
       const page = await signedInPage(browser);
       await page.goto(`${base}/?view=review&risk=${riskId}&version=${versionId}`);
       assert.equal(await page.getByRole("button", { name: "Назначить ответственного" }).count(), 0);
+      assert.equal(await page.getByRole("button", { name: "Изменить группу" }).count(), 0);
       await page.getByRole("button", { name: "Утвердить", exact: true }).click();
       await page.getByRole("alert").filter({ hasText: conflict }).waitFor();
       await page.getByRole("button", { name: "Обновить карточку" }).waitFor();
@@ -426,57 +441,264 @@ test("компоненты пилота через сервер Next.js и ко�
     }
   });
 
-  await t.test("автор отправляет предложение без владельца, ревьюер сразу открывает опубликованную карточку", async () => {
+  await t.test("автор отправляет предложение с группой или без неё, ревьюер открывает опубликованную карточку", async () => {
     const browser = await chromium.launch({ channel: process.env.PILOT_BROWSER ?? "chrome" });
     try {
       const emptyHistory = { ...history, publishedVersions: [] };
-      const draft: Proposal = { ...firstProposal, status: "DRAFT", revision: 1, fields: { ...firstProposal.fields, title: null } };
-      const saved: Proposal = { ...firstProposal, status: "DRAFT", revision: 2 };
-      const author = await signedInPage(browser);
-      backend.expect([
-        ...pageExchanges(account, { view: "mine", items: [draft] }),
-        ...cardExchanges(null, draft, emptyHistory),
-        { operation: "getCsrfToken", cookie, status: 200, reply: { token: "draft-csrf" } },
-        { operation: "saveRiskDraft", path, cookie, csrf: "draft-csrf", status: 200, reply: saved,
-          body: { versionId, expectedRevision: 1, fields: firstProposal.fields } },
-        { operation: "getCsrfToken", cookie, status: 200, reply: { token: "submit-csrf" } },
-        { operation: "actOnRiskDraft", path: { ...path, action: "submit" }, cookie, csrf: "submit-csrf",
-          body: { versionId, expectedRevision: 2 }, status: 200, reply: { riskId, versionId, revision: 3, status: "IN_REVIEW" } },
-        { operation: "listRisks", query: { view: "mine" }, cookie, status: 200, reply: { view: "mine", items: [firstProposal] } },
-        { operation: "listParticipants", cookie, status: 200, reply: [participant] },
-        ...cardExchanges(null, firstProposal, emptyHistory),
-      ]);
-      await author.goto(`${base}/?view=mine&risk=${riskId}&version=${versionId}`);
-      assert.equal(await author.getByLabel(/Владелец|Ответственный/).count(), 0);
-      await author.getByLabel("Название *", { exact: true }).fill(title);
-      await author.getByRole("button", { name: "Отправить на ревью" }).click();
-      await author.getByText("Предложение отправлено на ревью.").waitFor();
-      await author.getByText("На ревью", { exact: true }).waitFor();
-      await author.waitForLoadState("networkidle");
-      backend.assertComplete();
+      for (const groupId of [null, payments.id]) {
+        const proposal = { ...firstProposal, fields: { ...firstProposal.fields, groupId } };
+        const draft: Proposal = { ...firstProposal, status: "DRAFT", revision: 1, fields: { ...firstProposal.fields, title: null } };
+        const saved: Proposal = { ...proposal, status: "DRAFT", revision: 2 };
+        const author = await signedInPage(browser);
+        backend.expect([
+          ...pageExchanges(account, { view: "mine", items: [draft] }, undefined, undefined, [payments]),
+          ...cardExchanges(null, draft, emptyHistory),
+          { operation: "getCsrfToken", cookie, status: 200, reply: { token: "draft-csrf" } },
+          { operation: "saveRiskDraft", path, cookie, csrf: "draft-csrf", status: 200, reply: saved,
+            body: { versionId, expectedRevision: 1, fields: saved.fields } },
+          { operation: "getCsrfToken", cookie, status: 200, reply: { token: "submit-csrf" } },
+          { operation: "actOnRiskDraft", path: { ...path, action: "submit" }, cookie, csrf: "submit-csrf",
+            body: { versionId, expectedRevision: 2 }, status: 200, reply: { riskId, versionId, revision: 3, status: "IN_REVIEW" } },
+          { operation: "listRisks", query: { view: "mine" }, cookie, status: 200, reply: { view: "mine", items: [proposal] } },
+          { operation: "listParticipants", cookie, status: 200, reply: [participant] },
+          ...cardExchanges(null, proposal, emptyHistory),
+        ]);
+        await author.goto(`${base}/?view=mine&risk=${riskId}&version=${versionId}`);
+        assert.equal(await author.getByLabel(/Владелец|Ответственный/).count(), 0);
+        assert.equal(await author.getByLabel("Группа риска").inputValue(), "");
+        if (groupId) await author.getByLabel("Группа риска").selectOption(groupId);
+        await author.getByLabel("Название *", { exact: true }).fill(title);
+        await author.getByRole("button", { name: "Отправить на ревью" }).click();
+        await author.getByText("Предложение отправлено на ревью.").waitFor();
+        await author.getByText("На ревью", { exact: true }).waitFor();
+        await author.waitForLoadState("networkidle");
+        backend.assertComplete();
+        await author.close();
+      }
 
       const reviewer = await signedInPage(browser);
       const reviewerAccount = { ...account, ...replacement, isReviewer: true };
+      const groupedProposal = { ...firstProposal, fields: { ...firstProposal.fields, groupId: payments.id } };
       backend.expect([
-        ...pageExchanges(reviewerAccount, { view: "review", items: [firstProposal] }),
-        ...cardExchanges(null, firstProposal, emptyHistory),
+        ...pageExchanges(reviewerAccount, { view: "review", items: [groupedProposal] }, undefined, undefined, [payments]),
+        ...cardExchanges(null, groupedProposal, emptyHistory),
         { operation: "getCsrfToken", cookie, status: 200, reply: { token: "approve-csrf" } },
         { operation: "actOnRiskDraft", path: { ...path, action: "approve" }, cookie, csrf: "approve-csrf",
           body: { versionId, expectedRevision: 3 }, status: 200, reply: { riskId, versionId, revision: 4, status: "APPROVED" } },
         { operation: "listRisks", query: { view: "review" }, cookie, status: 200, reply: { view: "review", items: [] } },
         { operation: "listParticipants", cookie, status: 200, reply: [participant] },
-        ...cardExchanges(published, null, history),
+        ...cardExchanges({ ...published, group: payments }, null, history),
       ]);
       await reviewer.goto(`${base}/?view=review&risk=${riskId}&version=${versionId}`);
+      await reviewer.getByText(payments.name, { exact: true }).waitFor();
       await reviewer.getByRole("button", { name: "Утвердить", exact: true }).click();
       await reviewer.getByRole("heading", { name: title }).waitFor();
       await reviewer.getByText("Предложил", { exact: true }).waitFor();
       await reviewer.getByText("Не назначен", { exact: true }).waitFor();
+      await reviewer.getByText(payments.name, { exact: true }).waitFor();
       assert.equal(new URL(reviewer.url()).searchParams.get("version"), null);
       await reviewer.getByRole("button", { name: "Назначить ответственного" }).click();
       assert.equal(await reviewer.getByRole("option", { name: participant.displayName }).count(), 1);
       await reviewer.waitForLoadState("networkidle");
       backend.assertComplete();
+    } finally {
+      await browser.close();
+    }
+  });
+
+  await t.test("справочник загружается на сервере, администратор создаёт и переименовывает группы", async () => {
+    const browser = await chromium.launch({ channel: process.env.PILOT_BROWSER ?? "chrome" });
+    try {
+      const page = await signedInPage(browser);
+      const url = `${base}/?view=groups`;
+      const directory = (profile: Account): Exchange[] => [
+        { operation: "getProfile", cookie, status: 200, reply: profile },
+        { operation: "listRiskGroups", cookie, status: 200, reply: [signIn] },
+      ];
+      backend.expect(directory(account));
+      const html = await fetch(url, { headers: { cookie } }).then((response) => response.text());
+      assert.match(html, /<h2>Аутентификация<\/h2>/);
+      assert.doesNotMatch(html, /Создать группу|Переименовать/);
+      backend.assertComplete();
+
+      backend.expect(directory({ ...account, isAdmin: true }));
+      await page.goto(url);
+      const name = page.getByLabel("Название новой группы");
+      const create = page.getByRole("button", { name: "Создать группу" });
+      await name.fill("   ");
+      await create.click();
+      await page.getByRole("alert").filter({ hasText: "Введите название группы." }).waitFor();
+      assert.equal(await name.inputValue(), "   ");
+
+      const write = (exchange: Omit<Exchange, "cookie" | "csrf">): Exchange[] => [
+        { operation: "getCsrfToken", cookie, status: 200, reply: { token: "group-csrf" } },
+        { ...exchange, cookie, csrf: "group-csrf" },
+      ];
+      await name.fill("  Оплаты  ");
+      backend.expect(write({ operation: "createRiskGroup", body: { name: "  Оплаты  " }, status: 201, reply: payments }));
+      await create.click();
+      const row = page.locator("section").filter({ has: page.getByRole("heading", { name: payments.name, exact: true }) });
+      await row.getByRole("button", { name: "Переименовать" }).click();
+      const newName = row.getByLabel("Новое название");
+      const rename = row.getByRole("button", { name: "Сохранить название" });
+      const renameRequest = { operation: "renameRiskGroup" as const, path: { id: payments.id } };
+      const duplicate = "аутентификация";
+      backend.expect(write({ ...renameRequest, body: { name: duplicate }, status: 409,
+        reply: { code: "RISK_GROUP_NAME_CONFLICT", message: "Группа с таким названием уже существует." } }));
+      await newName.fill(duplicate);
+      await rename.click();
+      await row.getByRole("alert").waitFor();
+      assert.equal(await newName.inputValue(), duplicate);
+
+      const renamed = { ...payments, name: "Платежи" };
+      backend.expect(write({ ...renameRequest, body: { name: renamed.name }, status: 200, reply: renamed }));
+      await newName.fill(renamed.name);
+      await rename.click();
+      await page.getByRole("heading", { name: renamed.name }).waitFor();
+      await groupScreenshot(page, "groups-admin.png");
+      backend.assertComplete();
+    } finally {
+      await browser.close();
+    }
+  });
+
+  await t.test("группу можно сменить при открытой правке, конфликт предлагает обновить карточку", async () => {
+    const browser = await chromium.launch({ channel: process.env.PILOT_BROWSER ?? "chrome" });
+    try {
+      const page = await signedInPage(browser);
+      const reviewer = { ...account, isReviewer: true };
+      const admin = { ...account, isAdmin: true };
+      const grouped = { ...published, group: payments, hasOpenDraft: true };
+      const active: RiskList = { view: "active", items: [{ ...summary, group: payments, hasOpenDraft: true }] };
+      const firstEvent = { versionId, actor: participant, action: "APPROVE", occurredAt } as const;
+      const initialHistory: RiskHistory = { ...history, events: [firstEvent, { ...firstEvent, initialGroupName: "Платежи v1" }] };
+      const groups = [payments, signIn];
+      const url = `${base}/?view=active&risk=${riskId}`;
+      const edit = page.getByRole("button", { name: "Изменить группу" });
+      for (const profile of [account, reviewer, admin]) {
+        backend.expect([...pageExchanges(profile, active, undefined, undefined, groups), ...cardExchanges(grouped, null, initialHistory)]);
+        await page.goto(url);
+        await page.getByText("Платежи v1", { exact: true }).waitFor();
+        assert.equal(await page.getByText("Группа при публикации", { exact: true }).count(), 1);
+        assert.equal(await edit.count(), profile === account ? 0 : 1);
+        backend.assertComplete();
+      }
+
+      const patch = (groupId: string | null, revision: number, status: number, reply: unknown): Exchange[] => [
+        { operation: "getCsrfToken", cookie, status: 200, reply: { token: "change-group-csrf" } },
+        { operation: "updateRiskGroup", path, cookie, csrf: "change-group-csrf", status, reply,
+          body: { groupId, expectedGroupRevision: revision } },
+      ];
+      const moved = { ...grouped, group: signIn, groupRevision: 2 };
+      const groupEvent = { ...firstEvent, action: "GROUP_CHANGED", previousGroupName: payments.name,
+        newGroupName: signIn.name } as const;
+      const journal = { ...initialHistory, events: [...initialHistory.events, groupEvent] };
+      backend.expect([
+        ...patch(signIn.id, 1, 200, moved),
+        { operation: "getRiskHistory", path, cookie, status: 200, reply: journal },
+        { operation: "listParticipants", cookie, status: 200, reply: [participant] },
+        { operation: "listRisks", query: { view: "active" }, cookie, status: 200,
+          reply: { view: "active", items: [{ ...summary, group: signIn, hasOpenDraft: true }] } },
+      ]);
+      await edit.click();
+      await page.getByLabel("Группа риска").selectOption(signIn.id);
+      await page.getByRole("button", { name: "Сохранить группу" }).click();
+      await page.getByText(signIn.name, { exact: true }).waitFor();
+      await page.getByText("Оплаты → Аутентификация", { exact: true }).waitFor();
+      await page.waitForLoadState("networkidle");
+      await groupScreenshot(page, "risk-card.png");
+      backend.assertComplete();
+
+      const conflict = "Обновите карточку и повторите действие.";
+      backend.expect(patch(null, 2, 409, { code: "RISK_CONFLICT", message: conflict }));
+      await edit.click();
+      await page.getByLabel("Группа риска").selectOption("");
+      await page.getByRole("button", { name: "Сохранить группу" }).click();
+      await page.getByRole("alert").filter({ hasText: conflict }).waitFor();
+      const archived = { ...moved, snapshot: { ...moved.snapshot, riskState: "REMOVED", closureReason: "Приняты меры" } } as const;
+      backend.expect([
+        ...cardExchanges(archived, null, journal),
+        { operation: "listParticipants", cookie, status: 200, reply: [participant] },
+        { operation: "listRisks", query: { view: "active" }, cookie, status: 200, reply: { view: "active", items: [] } },
+      ]);
+      await page.getByRole("button", { name: "Обновить карточку" }).click();
+      await page.getByText("Приняты меры", { exact: true }).waitFor();
+      assert.equal(await edit.count(), 0);
+      await page.waitForLoadState("networkidle");
+      backend.assertComplete();
+    } finally {
+      await browser.close();
+    }
+  });
+
+  await t.test("активные риски сгруппированы, архив сохраняет таблицу и оба списка сохраняют фильтры", async () => {
+    const browser = await chromium.launch({ channel: process.env.PILOT_BROWSER ?? "chrome" });
+    try {
+      const page = await signedInPage(browser);
+      const groups = [payments, signIn, { ...signIn, id: olderOccurrence.id, name: "Чаевые" }];
+      const payment = { ...summary, group: payments, assignee };
+      const otherPayment = { ...payment, riskId: replacement.id, title: "Повторная оплата" };
+      const lowPayment = { ...payment, riskId: occurrence.id, title: "Автовозврат", likelihood: 1, impact: 4,
+        priority: { score: 4, category: "LOW", criticalImpact: false } } as const;
+      const active: RiskList = { view: "active", items: [
+        { ...summary, riskId: versionId, title: "Авария сети" },
+        { ...summary, riskId: authorId, title: "Вход недоступен", group: signIn },
+        payment, otherPayment, lowPayment,
+      ] };
+      backend.expect(pageExchanges(account, active, undefined, undefined, groups));
+      await page.goto(`${base}/?view=active`);
+      assert.deepEqual(await page.getByRole("heading", { level: 2 }).allTextContents(), ["Аутентификация", "Оплаты", "Без группы"]);
+      assert.deepEqual(await page.getByRole("table", { name: "Оплаты" }).getByRole("rowheader").allTextContents(),
+        [title, otherPayment.title, lowPayment.title]);
+      await groupScreenshot(page, "active-register.png");
+      backend.assertComplete();
+
+      const filters = { q: "заявок", assignee: authorId, category: "HIGH", group: payments.id };
+      const groupedCard = { ...published, group: payments, assignee };
+      for (const view of ["active", "archive"] as const) {
+        const item = { ...payment, riskState: view === "archive" ? "REMOVED" as const : "ACTIVE" as const };
+        const result: RiskList = { view, items: [item] };
+        const startingList: RiskList = view === "active" ? active : { view, items: [item, { ...item,
+          riskId: olderOccurrence.id, group: null, title: "Перебой связи" }] };
+        const startQuery = { view };
+        const query = { view, ...filters };
+        backend.expect(pageExchanges(account, startingList, startQuery, undefined, groups));
+        await page.goto(`${base}/?view=${view}`);
+        if (view === "archive") {
+          assert.equal(await page.getByRole("table").count(), 1);
+          await page.getByRole("columnheader", { name: "Группа", exact: true }).waitFor();
+          await page.getByRole("cell", { name: "Без группы", exact: true }).waitFor();
+          await groupScreenshot(page, "archive.png");
+        }
+        backend.expect(pageExchanges(account, result, query, undefined, groups));
+        await page.getByRole("searchbox", { name: "Поиск" }).fill(filters.q);
+        await page.getByLabel("Ответственный", { exact: true }).selectOption(filters.assignee);
+        await page.getByLabel("Категория", { exact: true }).selectOption(filters.category);
+        await page.getByLabel("Группа", { exact: true }).selectOption(filters.group);
+        await page.getByRole("button", { name: "Найти" }).click();
+        assert.equal(await page.getByRole("table").count(), 1);
+        if (view === "active") assert.deepEqual(await page.getByRole("heading", { level: 2 }).allTextContents(), [payments.name]);
+        backend.assertComplete();
+        const card: PublishedRisk = view === "active" ? groupedCard : { ...groupedCard,
+          snapshot: { ...groupedCard.snapshot, riskState: "REMOVED", closureReason: "Приняты меры" } };
+        backend.expect([...pageExchanges(account, result, query, undefined, groups), ...cardExchanges(card, null, history)]);
+        await page.getByRole("link", { name: title }).click();
+        await page.getByText(payments.name, { exact: true }).waitFor();
+        const back = page.getByRole("link", { name: /К списку/ });
+        const expectedUrl = new URL(await back.getAttribute("href") ?? "", base);
+        assert.deepEqual(Object.fromEntries(expectedUrl.searchParams), query);
+        backend.expect(pageExchanges(account, result, query, undefined, groups));
+        await back.click();
+        assert.equal(await page.getByLabel("Группа", { exact: true }).inputValue(), payments.id);
+        backend.assertComplete();
+
+        backend.expect(pageExchanges(account, { view, items: [] }, { ...query, group: "ungrouped" }, undefined, groups));
+        await page.getByLabel("Группа", { exact: true }).selectOption("ungrouped");
+        await page.getByRole("button", { name: "Найти" }).click();
+        await page.getByRole("heading", { name: "Записей пока нет" }).waitFor();
+        assert.equal(await page.getByRole("table").count(), 0);
+        backend.assertComplete();
+      }
     } finally {
       await browser.close();
     }

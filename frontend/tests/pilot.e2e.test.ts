@@ -162,6 +162,7 @@ test("рабочий пилот: первый вход, роли, отзыв с�
     await link(author, title).click();
     await text(author, note).first().waitFor();
     await button(author, "Предложить правку").click();
+    await author.getByLabel("Решение и меры", { exact: true }).waitFor();
     const occurrences = (page: Page) => page.getByRole("region", { name: "Случаи проявления риска" });
     const occurrence = "Сортировка заявок заняла два дня.";
     await button(occurrences(author), "Добавить случай").click();

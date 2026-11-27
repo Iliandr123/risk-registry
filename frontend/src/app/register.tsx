@@ -1,9 +1,10 @@
 import { useEffect, useState } from "react";
-import { errorMessage, type Account, type Api, type Assignee, type Participant, type RiskList } from "./api";
+import { errorMessage, type Account, type Api, type Assignee, type Participant, type RiskGroup, type RiskList, type RiskSummary } from "./api";
 import { RiskCard } from "./risk-card";
 import type { Card, Selection } from "./read-card";
 import { registerUrl, type RegisterView } from "./navigation";
 import { AssigneeName, categories, dateLabel, PriorityBadge, proposalStatuses, riskStates } from "./risk-fields";
+import { byGroupName, GroupOptions, noGroup } from "./risk-groups";
 
 function listedAssignees(list: RiskList) {
   return list.view === "active" || list.view === "archive"
@@ -14,6 +15,7 @@ function listedAssignees(list: RiskList) {
 export type InitialRegister = {
   list: RiskList;
   participants: Participant[];
+  groups: RiskGroup[];
   filters: Record<string, string>;
   selection?: Selection;
   card?: Card;
@@ -24,6 +26,7 @@ export function Register({ api, account, view, onViewChange, label, initial }: {
   initial: InitialRegister;
 }) {
   const filters = initial.filters;
+  const groups = initial.groups;
   const [selection, setSelection] = useState<Selection | null>(initial.selection ?? null);
   const [participants, setParticipants] = useState(initial.participants);
   const [list, setList] = useState(initial.list);
@@ -114,7 +117,7 @@ export function Register({ api, account, view, onViewChange, label, initial }: {
       {!initial.selection && <button className="quiet back" onClick={() => { setSelection(null); setMessage(""); }}>← К списку</button>}
       <RiskCard key={`${selection.riskId}/${selection.proposal?.versionId ?? "published"}/${cardPeriod}`}
         initial={cardPeriod === 0 && selection === initial.selection ? initial.card : undefined}
-        api={api} selection={selection} account={account} participants={participants} onUpdate={update}
+        api={api} selection={selection} account={account} participants={participants} groups={groups} onUpdate={update}
         refreshParticipants={async () => setParticipants(await api.participants())} />
     </> : <>
       {publishedView && <form className="panel filters" method="get" action="/" key={view}>
@@ -129,6 +132,13 @@ export function Register({ api, account, view, onViewChange, label, initial }: {
           <option value="">Все категории</option>
           {Object.entries(categories).map(([key, label]) => <option key={key} value={key}>{label}</option>)}
         </select></label>
+        <label><span id="filter-group">Группа</span><select aria-labelledby="filter-group" name="group" defaultValue={filters.group}>
+          <option value="">Все группы</option>
+          <option value="ungrouped">{noGroup}</option>
+          {filters.group && filters.group !== "ungrouped" && !groups.some(({ id }) => id === filters.group) &&
+            <option value={filters.group}>Выбранная группа</option>}
+          <GroupOptions groups={groups} />
+        </select></label>
         <button className="primary">Найти</button>
       </form>}
       {listError && <div className="error" role="alert">{listError}{" "}
@@ -137,26 +147,16 @@ export function Register({ api, account, view, onViewChange, label, initial }: {
       {!currentList && !listError && <p role="status">Загружаем список…</p>}
       {currentList?.items.length === 0 && <div className="panel empty">
         <h2>{view === "review" ? "Очередь пуста" : "Записей пока нет"}</h2>
-        {publishedView && ["q", "assignee", "category"].some((key) => filters[key]) && <p className="muted">Попробуйте изменить поиск или фильтры.</p>}
+        {publishedView && ["q", "assignee", "category", "group"].some((key) => filters[key]) && <p className="muted">Попробуйте изменить поиск или фильтры.</p>}
       </div>}
-      {(currentList?.view === "active" || currentList?.view === "archive") && currentList.items.length > 0 &&
-        <div className="panel table-wrap">
-          <table aria-label={label}>
-            <thead><tr><th>Риск</th><th>Ответственный</th><th>Вероятность</th><th>Влияние</th><th>Приоритет</th>
-              <th>Дата оценки</th><th>{view === "archive" ? "Состояние" : "Пересмотр"}</th></tr></thead>
-            <tbody>{currentList.items.map((item) => <tr key={item.riskId}>
-              <th scope="row"><a className="text-button" href={riskLink(item.riskId)}>{item.title}</a>{item.hasOpenDraft && <small>Правка в работе</small>}</th>
-              <td><AssigneeName assignee={item.assignee} /></td>
-              <td>{item.likelihood}</td><td>{item.impact}</td>
-              <td><PriorityBadge priority={item.priority} /></td>
-              <td>{dateLabel(item.assessment.date)}</td>
-              <td>{view === "archive" ? riskStates[item.riskState] : <>
-                {dateLabel(item.assessment.reviewDueDate)}
-                {item.assessment.reviewRequired && <small className="overdue">Требует пересмотра</small>}
-              </>}</td>
-            </tr>)}</tbody>
-          </table>
-        </div>}
+      {currentList?.view === "active" && currentList.items.length > 0 &&
+        <div className="stack">{groupSections(currentList.items).map(({ group, items }) =>
+          <section key={group?.id ?? "ungrouped"} className="risk-group-section">
+            <h2>{group?.name ?? noGroup}</h2>
+            <RiskTable items={items} label={group?.name ?? noGroup} riskLink={riskLink} />
+          </section>)}</div>}
+      {currentList?.view === "archive" && currentList.items.length > 0 &&
+        <RiskTable items={currentList.items} label={label} riskLink={riskLink} archived />}
       {(currentList?.view === "mine" || currentList?.view === "review") && currentList.items.length > 0 &&
         <div className="panel table-wrap">
           <table aria-label={label}>
@@ -171,4 +171,47 @@ export function Register({ api, account, view, onViewChange, label, initial }: {
         </div>}
     </>}
   </>;
+}
+
+function groupSections(items: RiskSummary[]) {
+  const grouped = new Map<string, { group: RiskGroup; items: RiskSummary[] }>();
+  const ungrouped: RiskSummary[] = [];
+  // The API already orders risks by descending score and then by title.
+  for (const item of items) {
+    if (item.group) {
+      const section = grouped.get(item.group.id) ?? { group: item.group, items: [] };
+      section.items.push(item);
+      grouped.set(item.group.id, section);
+    } else {
+      ungrouped.push(item);
+    }
+  }
+  const sections: { group: RiskGroup | null; items: RiskSummary[] }[] =
+    Array.from(grouped.values()).sort((left, right) => byGroupName(left.group, right.group));
+  if (ungrouped.length > 0) sections.push({ group: null, items: ungrouped });
+  return sections;
+}
+
+function RiskTable({ items, label, riskLink, archived = false }: {
+  items: RiskSummary[]; label: string; riskLink: (id: string) => string; archived?: boolean;
+}) {
+  return <div className="panel table-wrap">
+    <table aria-label={label}>
+      <thead><tr><th>Риск</th>{archived && <th>Группа</th>}<th>Ответственный</th><th>Вероятность</th><th>Влияние</th>
+        <th>Приоритет</th><th>Дата оценки</th><th>{archived ? "Состояние" : "Пересмотр"}</th></tr></thead>
+      <tbody>{items.map((item) => <tr key={item.riskId}>
+        <th scope="row"><a className="text-button" href={riskLink(item.riskId)}>{item.title}</a>
+          {item.hasOpenDraft && <small>Правка в работе</small>}</th>
+        {archived && <td>{item.group?.name ?? noGroup}</td>}
+        <td><AssigneeName assignee={item.assignee} /></td>
+        <td>{item.likelihood}</td><td>{item.impact}</td>
+        <td><PriorityBadge priority={item.priority} /></td>
+        <td>{dateLabel(item.assessment.date)}</td>
+        <td>{archived ? riskStates[item.riskState] : <>
+          {dateLabel(item.assessment.reviewDueDate)}
+          {item.assessment.reviewRequired && <small className="overdue">Требует пересмотра</small>}
+        </>}</td>
+      </tr>)}</tbody>
+    </table>
+  </div>;
 }

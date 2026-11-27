@@ -2,7 +2,8 @@
 
 import { useCallback, useMemo, useState, type FormEvent } from "react";
 import { Accounts } from "./accounts";
-import { ApiError, createApi, errorMessage, type Account, type Api } from "./api";
+import { ApiError, createApi, errorMessage, type Account, type Api, type RiskGroup } from "./api";
+import { RiskGroups } from "./risk-groups";
 import { Register, type InitialRegister } from "./register";
 import { sections, type View } from "./navigation";
 
@@ -14,6 +15,7 @@ export type InitialPage = {
   error?: string;
   retry?: boolean;
   accounts?: Account[];
+  groups?: RiskGroup[];
   register?: InitialRegister;
 };
 
@@ -87,10 +89,12 @@ export function Home({ initial }: { initial: InitialPage }) {
         {initial.retry && <button onClick={() => window.location.reload()}>Повторить загрузку</button>}
         {view === "accounts" && session.isAdmin && initial.accounts && <Accounts api={api} account={session}
           initialAccounts={initial.accounts} onSessionRevoked={endSession} />}
+        {view === "groups" && initial.groups && <RiskGroups api={api} canManage={session.isAdmin}
+          initialGroups={initial.groups} />}
         {view === "password" && <div className="panel form-panel">
           <PasswordForm api={api} onSuccess={() => window.location.replace(new URL("/", window.location.href))} />
         </div>}
-        {view !== "accounts" && view !== "password" && initial.register && <Register initial={initial.register} api={api} account={session}
+        {view !== "accounts" && view !== "groups" && view !== "password" && initial.register && <Register initial={initial.register} api={api} account={session}
           view={view} onViewChange={setView} label={sections.find(({ id }) => id === view)!.label} />}
       </main>
     </div>

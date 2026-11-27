@@ -27,8 +27,8 @@ docker compose -p pilot-e2e run --rm backend bootstrap-admin operator "Адми�
 npm run test:e2e
 ```
 
-Серверные сценарии назначения и случаев проявления риска можно запустить отдельно
-командами `npm run test:e2e:assignment` и `npm run test:e2e:occurrences`.
+Серверные сценарии можно запустить отдельно командами `npm run test:e2e:assignment`,
+`npm run test:e2e:occurrences` и `npm run test:e2e:groups`.
 Для прямого подключения к Spring Boot задайте `PILOT_API_URL` и укажите действующий
 постоянный пароль тестового администратора без роли ревьюера в `PILOT_ADMIN_PASSWORD`.
 

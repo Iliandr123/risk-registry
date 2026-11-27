@@ -21,6 +21,8 @@ export type Priority = Schemas["Priority"];
 export type Assignee = Schemas["Assignee"];
 export type PublishedRisk = Schemas["PublishedRisk"];
 export type RiskHistory = Schemas["RiskHistory"];
+export type RiskGroup = Schemas["RiskGroup"];
+export type RiskSummary = Schemas["PublishedRiskSummary"];
 export type RiskOccurrence = Schemas["RiskOccurrence"];
 export type RiskOccurrencePage = Schemas["RiskOccurrencePage"];
 export type RiskOccurrenceContent = Body<"createRiskOccurrence">;
@@ -88,11 +90,18 @@ export function createApi(onSessionEnded: () => void, transport: (path: string, 
       request<Account>(`/admin/accounts/${id}`, "PATCH", settings),
     resetPassword: (id: string) => request<TemporaryPassword>(`/admin/accounts/${id}/reset-password`, "POST"),
     participants: () => request<Participant[]>("/participants"),
+    groups: () => request<RiskGroup[]>("/risk-groups"),
+    createGroup: (name: string) =>
+      request<RiskGroup>("/admin/risk-groups", "POST", { name } satisfies Body<"createRiskGroup">),
+    renameGroup: (id: string, name: string) =>
+      request<RiskGroup>(`/admin/risk-groups/${encodeURIComponent(id)}`, "PATCH", { name } satisfies Body<"renameRiskGroup">),
     risks: (query: URLSearchParams, signal?: AbortSignal) =>
       request<RiskList>(`/risks?${query}`, "GET", undefined, signal),
     risk: (id: string) => request<PublishedRisk>(riskPath(id)),
     assign: (id: string, assignment: Body<"updateRiskAssignment">) =>
       request<PublishedRisk>(`${riskPath(id)}/assignment`, "PATCH", assignment),
+    changeGroup: (id: string, group: Body<"updateRiskGroup">) =>
+      request<PublishedRisk>(`${riskPath(id)}/group`, "PATCH", group),
     history: (id: string) => request<RiskHistory>(`${riskPath(id)}/history`),
     occurrences: (id: string, cursor?: string) =>
       request<RiskOccurrencePage>(occurrencesPath(id) + (cursor === undefined ? "" : `?${new URLSearchParams({ cursor })}`)),

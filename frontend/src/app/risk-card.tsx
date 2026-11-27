@@ -1,10 +1,11 @@
 import { useEffect, useState, type FormEvent } from "react";
 import {
   ApiError, errorMessage, type Account, type Api, type DraftAction, type Participant,
-  type Proposal, type PublishedRisk, type RiskHistory,
+  type Proposal, type PublishedRisk, type RiskGroup, type RiskHistory,
 } from "./api";
 import { AssigneeName, dateLabel, FieldDetails, FieldEditor, proposalStatuses } from "./risk-fields";
 import { RiskOccurrences } from "./risk-occurrences";
+import { GroupSelect, noGroup } from "./risk-groups";
 
 import { readCard, type Card, type Selection } from "./read-card";
 
@@ -14,6 +15,7 @@ const events: Record<RiskHistory["events"][number]["action"], string> = {
   SUBMIT: "Отправлено на ревью", RETURN: "Возвращено автору", APPROVE: "Утверждено",
   WITHDRAW: "Отозвано", UNBLOCK: "Предложение закрыто", CONFIRM_ASSESSMENT: "Оценка подтверждена",
   ASSIGNMENT_CHANGED: "Назначение изменено", ASSIGNMENT_MIGRATED: "Перенесено из прежнего реестра",
+  GROUP_CHANGED: "Группа изменена",
 };
 const actionMessages: Record<DraftAction, string> = {
   submit: "Предложение отправлено на ревью.", return: "Предложение возвращено автору.",
@@ -22,8 +24,9 @@ const actionMessages: Record<DraftAction, string> = {
 const terminal = (proposal: Proposal) => ["APPROVED", "WITHDRAWN", "CLOSED"].includes(proposal.status);
 const eventDate = new Intl.DateTimeFormat("ru-RU", { dateStyle: "medium", timeStyle: "long", timeZone: "UTC" });
 
-export function RiskCard({ api, selection, account, participants, refreshParticipants, onUpdate, initial }: {
+export function RiskCard({ api, selection, account, participants, groups, refreshParticipants, onUpdate, initial }: {
   api: Api; selection: Selection; account: Account; participants: Participant[]; onUpdate: Update; initial?: Card;
+  groups: RiskGroup[];
   refreshParticipants: () => Promise<void>;
 }) {
   const [card, setCard] = useState<Card | null>(initial ?? null);
@@ -33,6 +36,8 @@ export function RiskCard({ api, selection, account, participants, refreshPartici
   const [conflict, setConflict] = useState(false);
   const [editingAssignment, setEditingAssignment] = useState(false);
   const [candidate, setCandidate] = useState<string | null>(null);
+  const [editingGroup, setEditingGroup] = useState(false);
+  const [groupId, setGroupId] = useState<string | null>(null);
   const { riskId, proposal } = selection;
 
   useEffect(() => {
@@ -88,6 +93,22 @@ export function RiskCard({ api, selection, account, participants, refreshPartici
     });
   }
 
+  function saveGroup(published: PublishedRisk) {
+    return run(async () => {
+      const updated = await api.changeGroup(riskId, { groupId, expectedGroupRevision: published.groupRevision });
+      setCard((current) => current?.published ? { ...current, published: updated } : current);
+      setEditingGroup(false);
+      onUpdate(selection, "Группа сохранена.", false);
+      try {
+        const history = await api.history(riskId);
+        setCard((current) => current && { ...current, history });
+      } catch (error) {
+        setError(errorMessage(error));
+        setConflict(true);
+      }
+    });
+  }
+
   const reload = () => onUpdate(selection, "");
   if (loadingError) return <div role="alert" className="error">{loadingError} <button onClick={reload}>Повторить</button></div>;
   if (!card) return <p role="status">Загружаем карточку…</p>;
@@ -96,6 +117,7 @@ export function RiskCard({ api, selection, account, participants, refreshPartici
   const unblock = published?.unblock;
   const candidates = participants.filter(({ id }) => id !== published?.assignee?.id || published.assignee.active);
   const selectedCandidate = candidate === "" || candidates.some(({ id }) => id === candidate) ? candidate : null;
+  const canManage = snapshot?.riskState === "ACTIVE" && (account.isReviewer || account.isAdmin);
 
   return <div className="stack">
     <div className="card-id">ID риска <code>{riskId}</code></div>
@@ -106,10 +128,26 @@ export function RiskCard({ api, selection, account, participants, refreshPartici
     {published && snapshot && <section className="panel risk-panel stack">
       <div><div className="section-label">Опубликованная версия</div><h2>{snapshot.title}</h2></div>
       <dl className="detail-metrics">
+        <div><dt>Группа</dt><dd>{published.group?.name ?? noGroup}</dd></div>
         <div><dt>Ответственный</dt><dd><AssigneeName assignee={published.assignee} /></dd></div>
         <div><dt>Предложил</dt><dd>{published.author.displayName}</dd></div>
       </dl>
-      {snapshot.riskState === "ACTIVE" && (account.isReviewer || account.isAdmin) && (
+      {canManage && (editingGroup ? <form onSubmit={(event) => {
+        event.preventDefault();
+        void saveGroup(published);
+      }}>
+        <fieldset className="stack" disabled={busy || conflict}>
+          <GroupSelect groups={groups} value={groupId} onChange={setGroupId} />
+          <div className="actions">
+            <button className="primary">Сохранить группу</button>
+            <button type="button" onClick={() => { setEditingGroup(false); setError(""); }}>Отмена</button>
+          </div>
+        </fieldset>
+      </form> : <div className="actions"><button disabled={busy || conflict} onClick={() => {
+        setGroupId(published.group?.id ?? null);
+        setEditingGroup(true);
+      }}>Изменить группу</button></div>)}
+      {canManage && (
         editingAssignment ? <form className="stack" onSubmit={(event) => {
           event.preventDefault();
           if (selectedCandidate !== null) void saveAssignment(published, selectedCandidate || null);
@@ -163,14 +201,15 @@ export function RiskCard({ api, selection, account, participants, refreshPartici
     {published && occurrences && <RiskOccurrences api={api} riskId={riskId} account={account}
       active={published.snapshot.riskState === "ACTIVE"} initial={occurrences} onReload={reload} />}
     {draft && <ProposalCard key={`${draft.versionId}/${draft.revision}`} api={api} account={account} proposal={draft}
-      disabled={busy || conflict} history={history}
+      disabled={busy || conflict} history={history} groups={groups}
       onUpdate={onUpdate} onReload={reload} showUnblock={!unblock} />}
     {history && <History history={history} />}
   </div>;
 }
 
-function ProposalCard({ api, account, proposal, disabled, history, onUpdate, onReload, showUnblock }: {
+function ProposalCard({ api, account, proposal, disabled, history, groups, onUpdate, onReload, showUnblock }: {
   api: Api; account: Account; proposal: Proposal;
+  groups: RiskGroup[];
   disabled: boolean; history: RiskHistory | null; onUpdate: Update; onReload: () => void; showUnblock: boolean;
 }) {
   const [version, setVersion] = useState(proposal);
@@ -184,6 +223,7 @@ function ProposalCard({ api, account, proposal, disabled, history, onUpdate, onR
   const reviewable = account.isReviewer && status === "IN_REVIEW";
   const locked = disabled || busy || conflict;
   const lastEvent = history?.events.filter((item) => item.versionId === version.versionId).at(-1);
+  const first = proposal.kind === "FIRST";
 
   async function run(operation: () => Promise<void>) {
     setBusy(true);
@@ -229,13 +269,19 @@ function ProposalCard({ api, account, proposal, disabled, history, onUpdate, onR
     {lastEvent?.comment && <p className="notice"><strong>{events[lastEvent.action]}</strong><br />{lastEvent.comment}</p>}
     {editable ? <form onSubmit={save}>
       <fieldset className="stack" disabled={locked}>
+        {first && <GroupSelect groups={groups} value={fields.groupId ?? null}
+          onChange={(groupId) => setFields({ ...fields, groupId })} />}
         <FieldEditor fields={fields} setFields={setFields} allowClosure={proposal.kind === "EDIT"} />
         <div className="actions">
           <button className="primary" value="submit">Отправить на ревью</button>
           <button value="save">Сохранить черновик</button>
         </div>
       </fieldset>
-    </form> : <FieldDetails fields={version.fields} />}
+    </form> : <>
+      {first && <dl className="detail-metrics"><div><dt>Группа</dt>
+        <dd>{groups.find(({ id }) => id === version.fields.groupId)?.name ?? noGroup}</dd></div></dl>}
+      <FieldDetails fields={version.fields} />
+    </>}
     {error && <p className="error" role="alert">{error}</p>}
     {conflict && <button onClick={onReload}>Обновить карточку</button>}
     <div className="actions">
@@ -274,6 +320,10 @@ function History({ history }: { history: RiskHistory }) {
         <small>{event.actor?.displayName ?? "Система"} · {eventDate.format(new Date(event.occurredAt))}</small>
         {(event.action === "ASSIGNMENT_CHANGED" || event.action === "ASSIGNMENT_MIGRATED") &&
           <p>{event.previousAssignee?.displayName ?? "Не назначен"} → {event.newAssignee?.displayName ?? "Не назначен"}</p>}
+        {event.action === "APPROVE" && event.initialGroupName !== undefined &&
+          <dl><dt>Группа при публикации</dt><dd>{event.initialGroupName ?? noGroup}</dd></dl>}
+        {event.action === "GROUP_CHANGED" &&
+          <p>{event.previousGroupName ?? noGroup} → {event.newGroupName ?? noGroup}</p>}
         {event.comment && <p>{event.comment}</p>}
       </li>)}</ol>}
     {history.publishedVersions.length > 0 && <h3>Утверждённые версии</h3>}

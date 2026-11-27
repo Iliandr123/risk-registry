@@ -161,6 +161,50 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/admin/risk-groups": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Создать группу рисков
+         * @description Только администратор.
+         */
+        post: operations["createRiskGroup"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/risk-groups/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Постоянный ID группы рисков */
+                id: components["schemas"]["Id"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Переименовать группу рисков
+         * @description Только администратор. ID и привязки рисков сохраняются. Карточки и списки
+         *     показывают новое название, а в истории остаются названия на момент действия.
+         */
+        patch: operations["renameRiskGroup"];
+        trace?: never;
+    };
     "/participants": {
         parameters: {
             query?: never;
@@ -170,6 +214,26 @@ export interface paths {
         };
         /** Получить список активных участников */
         get: operations["listParticipants"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/risk-groups": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Получить справочник групп рисков
+         * @description Доступно всем активным участникам.
+         */
+        get: operations["listRiskGroups"];
         put?: never;
         post?: never;
         delete?: never;
@@ -200,6 +264,8 @@ export interface paths {
          * Создать риск и его первый черновик
          * @description Доступно любому активному участнику.
          *     Риск получает постоянный ID, а черновик получает собственный ID и номер изменения 1.
+         *     groupId необязателен. Отсутствие поля или null создаёт предложение без группы.
+         *     UUID должен указывать на существующую группу, иначе возвращается 400.
          */
         post: operations["createRisk"];
         delete?: never;
@@ -221,8 +287,8 @@ export interface paths {
         /**
          * Прочитать опубликованную карточку
          * @description Доступно всем активным участникам после первой публикации, включая архив.
-         *     В карточке видны автор первого утверждённого предложения, текущее назначение
-         *     и наличие незавершённой правки. Если правку создал другой участник,
+         *     В карточке видны автор первого утверждённого предложения, текущее назначение,
+         *     группа и наличие незавершённой правки. Если правку создал другой участник,
          *     ревьюер дополнительно получает метаданные для её разблокировки.
          */
         get: operations["getRisk"];
@@ -247,7 +313,8 @@ export interface paths {
         /**
          * Прочитать доступную историю риска
          * @description После публикации общая история содержит утверждённые снимки и события
-         *     утверждения, подтверждения оценки, изменения и переноса назначения.
+         *     утверждения, подтверждения оценки, изменения и переноса назначения, смены группы.
+         *     Названия групп отражают состояние справочника на момент события.
          *     История предложения доступна автору,
          *     а ревьюерам — после отправки предложения, включая возврат, отзыв и закрытие.
          *     События и содержимое приватного черновика доступны в истории только автору,
@@ -368,6 +435,37 @@ export interface paths {
         patch: operations["updateRiskAssignment"];
         trace?: never;
     };
+    "/risks/{id}/group": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Постоянный ID риска */
+                id: components["parameters"]["RiskId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Назначить, сменить или снять группу риска
+         * @description Доступно ревьюеру или администратору для опубликованного активного риска.
+         *     Для отсутствующего или неопубликованного риска возвращается 404.
+         *     Архивный риск и устаревшая ревизия дают 409 RISK_CONFLICT. UUID должен
+         *     указывать на существующую группу, иначе возвращается 400. null снимает группу.
+         *
+         *     Ревизия проверяется до сравнения с текущей группой. При актуальной ревизии
+         *     и совпадающем значении возвращается карточка без изменений. Смена группы
+         *     сохраняется вместе с новой ревизией и событием истории. Опубликованная версия,
+         *     открытая правка, дата оценки и срок пересмотра сохраняются.
+         */
+        patch: operations["updateRiskGroup"];
+        trace?: never;
+    };
     "/risks/{id}/draft": {
         parameters: {
             query?: never;
@@ -382,6 +480,7 @@ export interface paths {
          * Прочитать незавершённую версию
          * @description Черновик доступен автору. Отправленная и возвращённая версии доступны автору
          *     и ревьюерам. Запрос чужого приватного черновика возвращает 404, в том числе ревьюеру.
+         *     Выбор группы первого предложения виден только тем, кому доступно само предложение.
          */
         get: operations["getRiskDraft"];
         put?: never;
@@ -399,6 +498,9 @@ export interface paths {
          * Сохранить поля незавершённой версии
          * @description Только автор версии в статусе DRAFT или RETURNED. Отсутствующие поля
          *     сохраняют прежние значения, а null очищает допускающее его поле.
+         *     fields.groupId допускается только в первом предложении. Если поле отсутствует,
+         *     сохраняется прежний выбор. null снимает выбор. UUID должен указывать на
+         *     существующую группу. Поле в правке или неизвестный UUID дают 400.
          *     Версия на ревью, смена версии или устаревший номер изменения дают 409
          *     для участника, имевшего право сохранить переданную версию.
          */
@@ -424,8 +526,10 @@ export interface paths {
          *       причиной, возможным событием, последствиями для продукта и оценками.
          *     - return — ревьюер возвращает IN_REVIEW автору. Требуется непустой comment.
          *     - approve — ревьюер утверждает IN_REVIEW, включая собственное предложение.
-         *       Риск впервые публикуется без ответственного. Утверждение правки, включая
-         *       завершение риска, сохраняет текущее назначение и его ревизию. Завершение
+         *       Риск впервые публикуется без ответственного и с группой первого предложения.
+         *       Событие первого утверждения содержит название группы или null. Утверждение
+         *       правки, включая завершение риска, сохраняет текущее назначение и группу
+         *       вместе с их ревизиями. Завершение
          *       требует причины в closureReason. При успехе указатель публикации переключается
          *       на утверждаемую версию, а прежние утверждённые снимки сохраняются.
          *     - withdraw — автор отзывает DRAFT, IN_REVIEW или RETURNED. Для первого
@@ -562,6 +666,23 @@ export interface components {
             assigneeId: string | null;
             expectedAssignmentRevision: components["schemas"]["AssignmentRevision"];
         };
+        RiskGroup: {
+            id: components["schemas"]["Id"];
+            name: components["schemas"]["NonBlankText"];
+        };
+        /**
+         * Format: int64
+         * @description Начинается с 1 при первой публикации и увеличивается при смене группы риска.
+         */
+        RiskGroupRevision: number;
+        UpdateRiskGroupRequest: {
+            /**
+             * Format: uuid
+             * @description ID выбранной группы или null для снятия группы.
+             */
+            groupId: string | null;
+            expectedGroupRevision: components["schemas"]["RiskGroupRevision"];
+        };
         /**
          * Format: int64
          * @description Ревизия случая начинается с 1 и увеличивается при исправлении.
@@ -615,6 +736,11 @@ export interface components {
             trackerUrl?: string | null;
             riskState?: components["schemas"]["RiskState"];
             closureReason?: string | null;
+            /**
+             * Format: uuid
+             * @description Выбор группы в первом предложении. null означает отсутствие группы.
+             */
+            groupId?: string | null;
         };
         SaveDraftRequest: {
             versionId: components["schemas"]["Id"];
@@ -639,7 +765,7 @@ export interface components {
             kind: "FIRST" | "EDIT";
             author: components["schemas"]["Participant"];
             fields: components["schemas"]["ProposalFields"];
-        } & components["schemas"]["ProposalIdentity"];
+        } & (components["schemas"]["ProposalIdentity"] & unknown);
         ProposalFields: WithRequired<components["schemas"]["DraftFields"], "title" | "cause" | "possibleEvent" | "productConsequences" | "likelihood" | "impact" | "decisionNote" | "trackerUrl" | "riskState" | "closureReason">;
         ProposalList: {
             /** @enum {string} */
@@ -669,6 +795,7 @@ export interface components {
             publishedVersionId: components["schemas"]["Id"];
             title: components["schemas"]["NonBlankText"];
             assignee: components["schemas"]["Assignee"] | null;
+            group: components["schemas"]["RiskGroup"] | null;
             likelihood: components["schemas"]["ScoreInput"];
             impact: components["schemas"]["ScoreInput"];
             priority: components["schemas"]["Priority"];
@@ -715,13 +842,15 @@ export interface components {
             author: components["schemas"]["Participant"];
             assignee: components["schemas"]["Assignee"] | null;
             assignmentRevision: components["schemas"]["AssignmentRevision"];
+            group: components["schemas"]["RiskGroup"] | null;
+            groupRevision: components["schemas"]["RiskGroupRevision"];
             assessment: components["schemas"]["Assessment"];
             hasOpenDraft: boolean;
             /** @description Только для ревьюера при незавершённой правке другого участника. */
             unblock?: components["schemas"]["UnblockMetadata"];
         };
         RiskEvent: {
-            /** @description Для событий назначения это версия, опубликованная на момент события. */
+            /** @description Для событий назначения и смены группы это версия, опубликованная на момент события. */
             versionId: components["schemas"]["Id"];
             /** @description Инициатор события. При системном переносе значение равно null. */
             actor: components["schemas"]["Participant"] | null;
@@ -729,13 +858,22 @@ export interface components {
              * @description ASSIGNMENT_MIGRATED обозначает системный перенос из прежнего реестра.
              * @enum {string}
              */
-            action: "SUBMIT" | "RETURN" | "APPROVE" | "WITHDRAW" | "UNBLOCK" | "CONFIRM_ASSESSMENT" | "ASSIGNMENT_CHANGED" | "ASSIGNMENT_MIGRATED";
+            action: "SUBMIT" | "RETURN" | "APPROVE" | "WITHDRAW" | "UNBLOCK" | "CONFIRM_ASSESSMENT" | "ASSIGNMENT_CHANGED" | "ASSIGNMENT_MIGRATED" | "GROUP_CHANGED";
             /** Format: date-time */
             occurredAt: string;
             comment?: string | null;
             previousAssignee?: components["schemas"]["Participant"] | null;
             newAssignee?: components["schemas"]["Participant"] | null;
-        } & (unknown & unknown);
+            /**
+             * @description Название группы на момент первой публикации или null. Поле отсутствует
+             *     у событий до появления групп и у последующих утверждений.
+             */
+            initialGroupName?: string | null;
+            /** @description Прежнее название группы на момент смены или null. */
+            previousGroupName?: string | null;
+            /** @description Новое название группы на момент смены или null. */
+            newGroupName?: string | null;
+        } & (unknown & unknown & unknown & unknown);
         RiskHistory: {
             riskId: components["schemas"]["Id"];
             publishedVersions: components["schemas"]["HistoricalPublishedSnapshot"][];
@@ -743,6 +881,36 @@ export interface components {
         };
     };
     responses: {
+        /** @description Сохранённая группа с постоянным ID и текущим названием */
+        SavedRiskGroup: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["RiskGroup"];
+            };
+        };
+        /** @description Название уже занято другой группой */
+        RiskGroupNameConflict: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                /**
+                 * @example {
+                 *       "code": "RISK_GROUP_NAME_CONFLICT",
+                 *       "message": "Группа с таким названием уже существует.",
+                 *       "fieldErrors": {
+                 *         "name": "Введите другое название."
+                 *       }
+                 *     }
+                 */
+                "application/json": {
+                    /** @constant */
+                    code?: "RISK_GROUP_NAME_CONFLICT";
+                } & components["schemas"]["Error"];
+            };
+        };
         /** @description Запрос не соответствует схеме или нарушает правила заполнения */
         InvalidRequest: {
             headers: {
@@ -876,6 +1044,18 @@ export interface components {
         RiskId: components["schemas"]["Id"];
     };
     requestBodies: {
+        RiskGroupName: {
+            content: {
+                "application/json": {
+                    /**
+                     * @description Сервер обрезает пробельные символы по краям. Пустое имя и
+                     *     зарезервированное «Без группы» в любом регистре дают 400.
+                     *     Имя другой группы без учёта регистра даёт 409.
+                     */
+                    name: components["schemas"]["NonBlankText"];
+                };
+            };
+        };
         ExpectedSnapshot: {
             content: {
                 "application/json": {
@@ -1151,6 +1331,42 @@ export interface operations {
             404: components["responses"]["NotFound"];
         };
     };
+    createRiskGroup: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: components["requestBodies"]["RiskGroupName"];
+        responses: {
+            201: components["responses"]["SavedRiskGroup"];
+            400: components["responses"]["InvalidRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["ForbiddenOrCsrfRejected"];
+            409: components["responses"]["RiskGroupNameConflict"];
+        };
+    };
+    renameRiskGroup: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Постоянный ID группы рисков */
+                id: components["schemas"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody: components["requestBodies"]["RiskGroupName"];
+        responses: {
+            200: components["responses"]["SavedRiskGroup"];
+            400: components["responses"]["InvalidRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["ForbiddenOrCsrfRejected"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["RiskGroupNameConflict"];
+        };
+    };
     listParticipants: {
         parameters: {
             query?: never;
@@ -1173,6 +1389,28 @@ export interface operations {
             403: components["responses"]["Forbidden"];
         };
     };
+    listRiskGroups: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Постоянные ID и текущие названия групп */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RiskGroup"][];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+        };
+    };
     listRisks: {
         parameters: {
             query?: {
@@ -1188,6 +1426,12 @@ export interface operations {
                 assignee?: components["schemas"]["Id"] | "needs-assignment";
                 /** @description Фильтр по категории приоритета */
                 category?: components["schemas"]["Category"];
+                /**
+                 * @description Для active и archive. UUID выбирает риски с этой группой, ungrouped —
+                 *     риски без группы. При отсутствии параметра доступны все группы.
+                 *     Фильтр применяется вместе с поиском и остальными фильтрами.
+                 */
+                group?: components["schemas"]["Id"] | "ungrouped";
             };
             header?: never;
             path?: never;
@@ -1457,6 +1701,38 @@ export interface operations {
                     } & WithRequired<components["schemas"]["Error"], "code">;
                 };
             };
+        };
+    };
+    updateRiskGroup: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Постоянный ID риска */
+                id: components["parameters"]["RiskId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateRiskGroupRequest"];
+            };
+        };
+        responses: {
+            /** @description Опубликованная карточка с текущей группой и её ревизией */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PublishedRisk"];
+                };
+            };
+            400: components["responses"]["InvalidRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["ForbiddenOrCsrfRejected"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["RiskConflict"];
         };
     };
     getRiskDraft: {

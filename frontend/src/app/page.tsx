@@ -19,12 +19,14 @@ export default async function Page({ searchParams }: { searchParams: Promise<Que
       initial = { ...initial, error: "Раздел недоступен для вашей роли." };
     } else if (view === "accounts") {
       initial.accounts = await api.accounts();
+    } else if (view === "groups") {
+      initial.groups = await api.groups();
     } else if (view !== "password") {
       const listQuery = registerUrl(view, query);
-      const [list, participants] = await Promise.all([
-        api.risks(listQuery), api.participants(),
+      const [list, participants, groups] = await Promise.all([
+        api.risks(listQuery), api.participants(), api.groups(),
       ]);
-      initial.register = { list, participants, filters: Object.fromEntries(listQuery) };
+      initial.register = { list, participants, groups, filters: Object.fromEntries(listQuery) };
       if (typeof query.risk === "string") {
         const proposal = (list.view === "mine" || list.view === "review")
           ? list.items.find((item) => item.riskId === query.risk && item.versionId === query.version)

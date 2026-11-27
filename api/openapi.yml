@@ -16,11 +16,11 @@ tags:
   - name: Аутентификация и профиль
     description: CSRF-токен, вход, выход, текущий профиль и смена пароля.
   - name: Администрирование
-    description: Создание учётных записей, управление ролями и активностью, сброс паролей.
+    description: Управление учётными записями и справочником групп рисков.
   - name: Участники
     description: Список активных участников для назначения ответственного.
   - name: Риски
-    description: Реестр, архив, карточки, черновики, ревью, история, случаи проявления, назначение ответственного и подтверждение оценки.
+    description: Реестр, архив, карточки, черновики, ревью, история, случаи проявления, группы рисков, назначение ответственного и подтверждение оценки.
 paths:
   /csrf:
     get:
@@ -273,6 +273,63 @@ paths:
         '404':
           $ref: '#/components/responses/NotFound'
 
+  /admin/risk-groups:
+    post:
+      operationId: createRiskGroup
+      tags: [Администрирование]
+      summary: Создать группу рисков
+      description: Только администратор.
+      security:
+        - SessionCookie: []
+          CsrfHeader: []
+      requestBody:
+        $ref: '#/components/requestBodies/RiskGroupName'
+      responses:
+        '201':
+          $ref: '#/components/responses/SavedRiskGroup'
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/ForbiddenOrCsrfRejected'
+        '409':
+          $ref: '#/components/responses/RiskGroupNameConflict'
+
+  /admin/risk-groups/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        description: Постоянный ID группы рисков
+        schema:
+          $ref: '#/components/schemas/Id'
+    patch:
+      operationId: renameRiskGroup
+      tags: [Администрирование]
+      summary: Переименовать группу рисков
+      description: |
+        Только администратор. ID и привязки рисков сохраняются. Карточки и списки
+        показывают новое название, а в истории остаются названия на момент действия.
+      security:
+        - SessionCookie: []
+          CsrfHeader: []
+      requestBody:
+        $ref: '#/components/requestBodies/RiskGroupName'
+      responses:
+        '200':
+          $ref: '#/components/responses/SavedRiskGroup'
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/ForbiddenOrCsrfRejected'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/RiskGroupNameConflict'
+
   /participants:
     get:
       operationId: listParticipants
@@ -287,6 +344,26 @@ paths:
                 type: array
                 items:
                   $ref: '#/components/schemas/Participant'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /risk-groups:
+    get:
+      operationId: listRiskGroups
+      tags: [Риски]
+      summary: Получить справочник групп рисков
+      description: Доступно всем активным участникам.
+      responses:
+        '200':
+          description: Постоянные ID и текущие названия групп
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/RiskGroup'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
@@ -332,6 +409,17 @@ paths:
           description: Фильтр по категории приоритета
           schema:
             $ref: '#/components/schemas/Category'
+        - name: group
+          in: query
+          description: |
+            Для active и archive. UUID выбирает риски с этой группой, ungrouped —
+            риски без группы. При отсутствии параметра доступны все группы.
+            Фильтр применяется вместе с поиском и остальными фильтрами.
+          schema:
+            oneOf:
+              - $ref: '#/components/schemas/Id'
+              - type: string
+                const: ungrouped
       responses:
         '200':
           description: Выбранное представление и доступные строки
@@ -354,6 +442,8 @@ paths:
       description: |
         Доступно любому активному участнику.
         Риск получает постоянный ID, а черновик получает собственный ID и номер изменения 1.
+        groupId необязателен. Отсутствие поля или null создаёт предложение без группы.
+        UUID должен указывать на существующую группу, иначе возвращается 400.
       security:
         - SessionCookie: []
           CsrfHeader: []
@@ -387,8 +477,8 @@ paths:
       summary: Прочитать опубликованную карточку
       description: |
         Доступно всем активным участникам после первой публикации, включая архив.
-        В карточке видны автор первого утверждённого предложения, текущее назначение
-        и наличие незавершённой правки. Если правку создал другой участник,
+        В карточке видны автор первого утверждённого предложения, текущее назначение,
+        группа и наличие незавершённой правки. Если правку создал другой участник,
         ревьюер дополнительно получает метаданные для её разблокировки.
       responses:
         '200':
@@ -413,7 +503,8 @@ paths:
       summary: Прочитать доступную историю риска
       description: |
         После публикации общая история содержит утверждённые снимки и события
-        утверждения, подтверждения оценки, изменения и переноса назначения.
+        утверждения, подтверждения оценки, изменения и переноса назначения, смены группы.
+        Названия групп отражают состояние справочника на момент события.
         История предложения доступна автору,
         а ревьюерам — после отправки предложения, включая возврат, отзыв и закрытие.
         События и содержимое приватного черновика доступны в истории только автору,
@@ -644,6 +735,50 @@ paths:
                     code: ASSIGNEE_INACTIVE
                     message: Выберите активного участника.
 
+  /risks/{id}/group:
+    parameters:
+      - $ref: '#/components/parameters/RiskId'
+    patch:
+      operationId: updateRiskGroup
+      tags: [Риски]
+      summary: Назначить, сменить или снять группу риска
+      description: |
+        Доступно ревьюеру или администратору для опубликованного активного риска.
+        Для отсутствующего или неопубликованного риска возвращается 404.
+        Архивный риск и устаревшая ревизия дают 409 RISK_CONFLICT. UUID должен
+        указывать на существующую группу, иначе возвращается 400. null снимает группу.
+
+        Ревизия проверяется до сравнения с текущей группой. При актуальной ревизии
+        и совпадающем значении возвращается карточка без изменений. Смена группы
+        сохраняется вместе с новой ревизией и событием истории. Опубликованная версия,
+        открытая правка, дата оценки и срок пересмотра сохраняются.
+      security:
+        - SessionCookie: []
+          CsrfHeader: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateRiskGroupRequest'
+      responses:
+        '200':
+          description: Опубликованная карточка с текущей группой и её ревизией
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PublishedRisk'
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/ForbiddenOrCsrfRejected'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/RiskConflict'
+
   /risks/{id}/draft:
     parameters:
       - $ref: '#/components/parameters/RiskId'
@@ -684,6 +819,7 @@ paths:
       description: |
         Черновик доступен автору. Отправленная и возвращённая версии доступны автору
         и ревьюерам. Запрос чужого приватного черновика возвращает 404, в том числе ревьюеру.
+        Выбор группы первого предложения виден только тем, кому доступно само предложение.
       responses:
         '200':
           description: Доступная незавершённая версия
@@ -704,6 +840,9 @@ paths:
       description: |
         Только автор версии в статусе DRAFT или RETURNED. Отсутствующие поля
         сохраняют прежние значения, а null очищает допускающее его поле.
+        fields.groupId допускается только в первом предложении. Если поле отсутствует,
+        сохраняется прежний выбор. null снимает выбор. UUID должен указывать на
+        существующую группу. Поле в правке или неизвестный UUID дают 400.
         Версия на ревью, смена версии или устаревший номер изменения дают 409
         для участника, имевшего право сохранить переданную версию.
       security:
@@ -751,8 +890,10 @@ paths:
           причиной, возможным событием, последствиями для продукта и оценками.
         - return — ревьюер возвращает IN_REVIEW автору. Требуется непустой comment.
         - approve — ревьюер утверждает IN_REVIEW, включая собственное предложение.
-          Риск впервые публикуется без ответственного. Утверждение правки, включая
-          завершение риска, сохраняет текущее назначение и его ревизию. Завершение
+          Риск впервые публикуется без ответственного и с группой первого предложения.
+          Событие первого утверждения содержит название группы или null. Утверждение
+          правки, включая завершение риска, сохраняет текущее назначение и группу
+          вместе с их ревизиями. Завершение
           требует причины в closureReason. При успехе указатель публикации переключается
           на утверждаемую версию, а прежние утверждённые снимки сохраняются.
         - withdraw — автор отзывает DRAFT, IN_REVIEW или RETURNED. Для первого
@@ -864,6 +1005,21 @@ components:
       schema:
         $ref: '#/components/schemas/Id'
   requestBodies:
+    RiskGroupName:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            additionalProperties: false
+            required: [name]
+            properties:
+              name:
+                $ref: '#/components/schemas/NonBlankText'
+                description: |
+                  Сервер обрезает пробельные символы по краям. Пустое имя и
+                  зарезервированное «Без группы» в любом регистре дают 400.
+                  Имя другой группы без учёта регистра даёт 409.
     ExpectedSnapshot:
       required: true
       content:
@@ -876,6 +1032,26 @@ components:
               expectedPublishedVersionId:
                 $ref: '#/components/schemas/Id'
   responses:
+    SavedRiskGroup:
+      description: Сохранённая группа с постоянным ID и текущим названием
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/RiskGroup'
+    RiskGroupNameConflict:
+      description: Название уже занято другой группой
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/Error'
+            properties:
+              code: { const: RISK_GROUP_NAME_CONFLICT }
+          example:
+            code: RISK_GROUP_NAME_CONFLICT
+            message: Группа с таким названием уже существует.
+            fieldErrors:
+              name: Введите другое название.
     InvalidRequest:
       description: Запрос не соответствует схеме или нарушает правила заполнения
       content:
@@ -1113,6 +1289,31 @@ components:
           description: ID активного участника или null для снятия назначения.
         expectedAssignmentRevision:
           $ref: '#/components/schemas/AssignmentRevision'
+    RiskGroup:
+      type: object
+      additionalProperties: false
+      required: [id, name]
+      properties:
+        id:
+          $ref: '#/components/schemas/Id'
+        name:
+          $ref: '#/components/schemas/NonBlankText'
+    RiskGroupRevision:
+      type: integer
+      format: int64
+      minimum: 1
+      description: Начинается с 1 при первой публикации и увеличивается при смене группы риска.
+    UpdateRiskGroupRequest:
+      type: object
+      additionalProperties: false
+      required: [groupId, expectedGroupRevision]
+      properties:
+        groupId:
+          type: [string, 'null']
+          format: uuid
+          description: ID выбранной группы или null для снятия группы.
+        expectedGroupRevision:
+          $ref: '#/components/schemas/RiskGroupRevision'
     RiskOccurrenceRevision:
       type: integer
       format: int64
@@ -1206,6 +1407,10 @@ components:
         riskState:
           $ref: '#/components/schemas/RiskState'
         closureReason: { type: [string, 'null'] }
+        groupId:
+          type: [string, 'null']
+          format: uuid
+          description: Выбор группы в первом предложении. null означает отсутствие группы.
     SaveDraftRequest:
       type: object
       additionalProperties: false
@@ -1247,6 +1452,18 @@ components:
     Proposal:
       allOf:
         - $ref: '#/components/schemas/ProposalIdentity'
+        - if:
+            properties:
+              kind: { const: FIRST }
+          then:
+            properties:
+              fields:
+                required: [groupId]
+          else:
+            properties:
+              fields:
+                properties:
+                  groupId: false
       required: [kind, author, fields]
       properties:
         kind: { type: string, enum: [FIRST, EDIT] }
@@ -1296,7 +1513,7 @@ components:
     PublishedRiskSummary:
       type: object
       additionalProperties: false
-      required: [riskId, publishedVersionId, title, assignee, likelihood, impact, priority, riskState, assessment, hasOpenDraft]
+      required: [riskId, publishedVersionId, title, assignee, group, likelihood, impact, priority, riskState, assessment, hasOpenDraft]
       properties:
         riskId:
           $ref: '#/components/schemas/Id'
@@ -1307,6 +1524,10 @@ components:
         assignee:
           anyOf:
             - $ref: '#/components/schemas/Assignee'
+            - type: 'null'
+        group:
+          anyOf:
+            - $ref: '#/components/schemas/RiskGroup'
             - type: 'null'
         likelihood:
           $ref: '#/components/schemas/ScoreInput'
@@ -1388,7 +1609,7 @@ components:
     PublishedRisk:
       type: object
       additionalProperties: false
-      required: [riskId, snapshot, author, assignee, assignmentRevision, assessment, hasOpenDraft]
+      required: [riskId, snapshot, author, assignee, assignmentRevision, group, groupRevision, assessment, hasOpenDraft]
       properties:
         riskId:
           $ref: '#/components/schemas/Id'
@@ -1403,6 +1624,12 @@ components:
             - type: 'null'
         assignmentRevision:
           $ref: '#/components/schemas/AssignmentRevision'
+        group:
+          anyOf:
+            - $ref: '#/components/schemas/RiskGroup'
+            - type: 'null'
+        groupRevision:
+          $ref: '#/components/schemas/RiskGroupRevision'
         assessment:
           $ref: '#/components/schemas/Assessment'
         hasOpenDraft: { type: boolean }
@@ -1422,7 +1649,7 @@ components:
       properties:
         versionId:
           $ref: '#/components/schemas/Id'
-          description: Для событий назначения это версия, опубликованная на момент события.
+          description: Для событий назначения и смены группы это версия, опубликованная на момент события.
         actor:
           description: Инициатор события. При системном переносе значение равно null.
           anyOf:
@@ -1430,7 +1657,7 @@ components:
             - type: 'null'
         action:
           type: string
-          enum: [SUBMIT, RETURN, APPROVE, WITHDRAW, UNBLOCK, CONFIRM_ASSESSMENT, ASSIGNMENT_CHANGED, ASSIGNMENT_MIGRATED]
+          enum: [SUBMIT, RETURN, APPROVE, WITHDRAW, UNBLOCK, CONFIRM_ASSESSMENT, ASSIGNMENT_CHANGED, ASSIGNMENT_MIGRATED, GROUP_CHANGED]
           description: ASSIGNMENT_MIGRATED обозначает системный перенос из прежнего реестра.
         occurredAt: { type: string, format: date-time }
         comment: { type: [string, 'null'] }
@@ -1442,7 +1669,36 @@ components:
           anyOf:
             - $ref: '#/components/schemas/Participant'
             - type: 'null'
+        initialGroupName:
+          type: [string, 'null']
+          pattern: '\S'
+          description: |
+            Название группы на момент первой публикации или null. Поле отсутствует
+            у событий до появления групп и у последующих утверждений.
+        previousGroupName:
+          type: [string, 'null']
+          pattern: '\S'
+          description: Прежнее название группы на момент смены или null.
+        newGroupName:
+          type: [string, 'null']
+          pattern: '\S'
+          description: Новое название группы на момент смены или null.
       allOf:
+        - if:
+            properties:
+              action: { const: GROUP_CHANGED }
+          then:
+            required: [previousGroupName, newGroupName]
+          else:
+            properties:
+              previousGroupName: false
+              newGroupName: false
+        - if:
+            properties:
+              action: { const: APPROVE }
+          else:
+            properties:
+              initialGroupName: false
         - if:
             properties:
               action: { enum: [ASSIGNMENT_CHANGED, ASSIGNMENT_MIGRATED] }

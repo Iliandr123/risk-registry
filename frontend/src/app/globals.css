@@ -70,7 +70,8 @@ p { line-height: 1.48; }
 .avatar { display: grid; place-items: center; width: 2rem; height: 2rem; border-radius: 50%; color: #194f45; background: #c9ebe0; font-weight: 700; }
 .content { padding: clamp(1.1rem, 4vw, 3rem); width: min(100%, 1450px); margin-inline: auto; }
 .page-header { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 1rem; margin-bottom: 1.55rem; }
-.filters { display: grid; grid-template-columns: minmax(150px, 1.5fr) minmax(130px, 1fr) minmax(120px, .9fr) auto; align-items: end; gap: .85rem; padding: 1rem; margin-bottom: 1rem; }
+.filters { display: grid; grid-template-columns: minmax(150px, 1.5fr) repeat(3, minmax(0, 1fr)) auto; align-items: end; gap: .85rem; padding: 1rem; margin-bottom: 1rem; }
+.risk-group-section > h2 { margin: 0 0 .55rem; overflow-wrap: anywhere; }
 .empty { padding: 2rem; }
 .empty p { margin-top: .5rem; }
 .table-wrap { overflow-x: auto; }

@@ -41,15 +41,18 @@ class RiskController {
                     @RequestParam(name = "view", required = false) String view,
                     @RequestParam(name = "q", required = false) String query,
                     @RequestParam(name = "assignee", required = false) String assignee,
-                    @RequestParam(name = "category", required = false) String category) {
+                    @RequestParam(name = "category", required = false) String category,
+                    @RequestParam(name = "group", required = false) String group) {
         try {
             boolean needsAssignment = "needs-assignment".equals(assignee);
+            boolean ungrouped = "ungrouped".equals(group);
             String selectedView = view == null ? "active" : view;
             if (needsAssignment && !selectedView.equals("active")) {
                 throw ApiProblem.invalidRequest();
             }
             return risks.list(member, selectedView, query, assignee == null || needsAssignment ? null : uuid(assignee),
-                    needsAssignment, category == null ? null : Category.valueOf(category));
+                    needsAssignment, category == null ? null : Category.valueOf(category),
+                    group == null || ungrouped ? null : uuid(group), ungrouped);
         } catch (IllegalArgumentException exception) {
             throw ApiProblem.invalidRequest();
         }
@@ -109,9 +112,16 @@ class RiskController {
     Published assign(@RequestAttribute(MEMBER) Member member, @PathVariable("id") String id,
                      @RequestBody JsonNode body) {
         requireObject(body, Set.of("assigneeId", "expectedAssignmentRevision"));
-        JsonNode candidate = body.get("assigneeId");
-        UUID assigneeId = candidate != null && candidate.isNull() ? null : requestId(body, "assigneeId");
-        return risks.assign(member, pathId(id), assigneeId, revision(body, "expectedAssignmentRevision"));
+        return risks.assign(member, pathId(id), nullableRequestId(body, "assigneeId"),
+                revision(body, "expectedAssignmentRevision"));
+    }
+
+    @PatchMapping("/{id}/group")
+    Published changeGroup(@RequestAttribute(MEMBER) Member member, @PathVariable("id") String id,
+                          @RequestBody JsonNode body) {
+        requireObject(body, Set.of("groupId", "expectedGroupRevision"));
+        return risks.changeGroup(member, pathId(id), nullableRequestId(body, "groupId"),
+                revision(body, "expectedGroupRevision"));
     }
 
     @GetMapping("/{id}/history")
@@ -198,7 +208,12 @@ class RiskController {
         }
     }
 
-    private static UUID pathId(String id) {
+    static UUID nullableRequestId(JsonNode body, String field) {
+        JsonNode value = body.get(field);
+        return value != null && value.isNull() ? null : requestId(body, field);
+    }
+
+    static UUID pathId(String id) {
         try {
             return uuid(id);
         } catch (IllegalArgumentException exception) {

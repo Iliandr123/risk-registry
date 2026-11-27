@@ -26,8 +26,12 @@ final class RiskResponses {
         }
     }
 
+    interface ProposalFields {}
+
+    record FirstProposalFields(@JsonUnwrapped DraftFields fields, UUID groupId) implements ProposalFields {}
+
     record Proposal(UUID riskId, UUID versionId, long revision, Status status, ProposalKind kind,
-                    Participant author, DraftFields fields) {}
+                    Participant author, ProposalFields fields) {}
 
     record Listing<T>(String view, List<T> items) {}
 
@@ -46,7 +50,8 @@ final class RiskResponses {
         }
     }
 
-    record Summary(UUID riskId, UUID publishedVersionId, String title, AccountDirectory.Participant assignee, int likelihood,
+    record Summary(UUID riskId, UUID publishedVersionId, String title, AccountDirectory.Participant assignee,
+                   RiskGroup group, int likelihood,
                    int impact, Priority priority, RiskState riskState, Assessment assessment, boolean hasOpenDraft) {}
 
     record Snapshot(UUID versionId, String title, String cause, String possibleEvent, String productConsequences,
@@ -58,13 +63,18 @@ final class RiskResponses {
     record Unblock(UUID versionId, long revision, String authorDisplayName) {}
 
     record Published(UUID riskId, Snapshot snapshot, Participant author, AccountDirectory.Participant assignee,
-                     long assignmentRevision, Assessment assessment, boolean hasOpenDraft,
+                     long assignmentRevision, RiskGroup group, long groupRevision, Assessment assessment, boolean hasOpenDraft,
                      @JsonInclude(JsonInclude.Include.NON_NULL) Unblock unblock) {}
 
     interface Event {}
 
     record WorkflowEvent(UUID versionId, Participant actor, EventAction action, OffsetDateTime occurredAt,
                          String comment) implements Event {}
+
+    record FirstPublicationEvent(@JsonUnwrapped WorkflowEvent event, String initialGroupName) implements Event {}
+
+    record GroupEvent(UUID versionId, Participant actor, EventAction action, OffsetDateTime occurredAt,
+                      String previousGroupName, String newGroupName) implements Event {}
 
     record AssignmentEvent(UUID versionId, Participant actor, EventAction action, OffsetDateTime occurredAt,
                            Participant previousAssignee, Participant newAssignee) implements Event {}

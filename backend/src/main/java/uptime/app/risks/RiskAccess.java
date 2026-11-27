@@ -23,7 +23,8 @@ class RiskAccess implements HandlerInterceptor, WebMvcConfigurer {
 
     @Override
     public void addInterceptors(InterceptorRegistry registry) {
-        registry.addInterceptor(this).addPathPatterns("/api/risks", "/api/risks/**");
+        registry.addInterceptor(this).addPathPatterns("/api/risks", "/api/risks/**", "/api/risk-groups",
+                "/api/admin/risk-groups", "/api/admin/risk-groups/*");
     }
 
     @Override

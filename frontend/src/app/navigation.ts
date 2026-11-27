@@ -1,7 +1,7 @@
 import type { RiskList } from "./api";
 
 export type RegisterView = RiskList["view"];
-export type View = RegisterView | "accounts" | "password";
+export type View = RegisterView | "accounts" | "groups" | "password";
 export type Query = Record<string, string | string[] | undefined>;
 
 export const sections: { id: View; label: string; icon: string }[] = [
@@ -9,6 +9,7 @@ export const sections: { id: View; label: string; icon: string }[] = [
   { id: "mine", label: "Мои предложения", icon: "▱" },
   { id: "review", label: "На ревью", icon: "✓" },
   { id: "archive", label: "Архив", icon: "▣" },
+  { id: "groups", label: "Группы рисков", icon: "▦" },
   { id: "accounts", label: "Участники", icon: "♙" },
   { id: "password", label: "Сменить пароль", icon: "⚿" },
 ];
@@ -16,7 +17,7 @@ export const sections: { id: View; label: string; icon: string }[] = [
 export function registerUrl(view: RegisterView, query: Query) {
   const params = new URLSearchParams({ view });
   if (view === "active" || view === "archive") {
-    for (const name of ["q", "assignee", "category"]) {
+    for (const name of ["q", "assignee", "category", "group"]) {
       const value = query[name];
       if (typeof value !== "string" || !value.trim()) continue;
       if (view === "archive" && name === "assignee" && value.trim() === "needs-assignment") continue;

@@ -11,9 +11,10 @@
     "api:generate": "openapi-typescript ../api/openapi.yml -o src/app/api.generated.ts",
     "api:check": "npm run api:generate -- --check",
     "test:components": "npm run build && node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --test tests/components.test.ts",
-    "test:e2e": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --test tests/pilot.e2e.test.ts && npm run test:e2e:assignment && npm run test:e2e:occurrences",
+    "test:e2e": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --test tests/pilot.e2e.test.ts && npm run test:e2e:assignment && npm run test:e2e:occurrences && npm run test:e2e:groups",
     "test:e2e:assignment": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --test tests/assignment.e2e.test.ts",
-    "test:e2e:occurrences": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --test tests/occurrences.e2e.test.ts"
+    "test:e2e:occurrences": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --test tests/occurrences.e2e.test.ts",
+    "test:e2e:groups": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --test tests/groups.e2e.test.ts"
   },
   "dependencies": {
     "next": "^16.0.0",

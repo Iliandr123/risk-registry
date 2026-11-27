@@ -7,9 +7,9 @@ import uptime.app.http.ApiProblem;
 
 record DraftFields(String title, String cause, String possibleEvent, String productConsequences,
                    Integer likelihood, Integer impact, String decisionNote,
-                   String trackerUrl, RiskState riskState, String closureReason) {
+                   String trackerUrl, RiskState riskState, String closureReason) implements RiskResponses.ProposalFields {
     private static final Set<String> NAMES = Set.of("title", "cause", "possibleEvent", "productConsequences",
-            "likelihood", "impact", "decisionNote", "trackerUrl", "riskState", "closureReason");
+            "likelihood", "impact", "decisionNote", "trackerUrl", "riskState", "closureReason", "groupId");
 
     enum RiskState { ACTIVE, REMOVED, MATERIALIZED }
 
