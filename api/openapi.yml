@@ -18,9 +18,9 @@ tags:
   - name: Администрирование
     description: Создание учётных записей, управление ролями и активностью, сброс паролей.
   - name: Участники
-    description: Список активных участников для выбора владельца риска.
+    description: Список активных участников для назначения ответственного.
   - name: Риски
-    description: Реестр, архив, карточки, черновики, ревью, история и подтверждение оценки.
+    description: Реестр, архив, карточки, черновики, ревью, история, случаи проявления, назначение ответственного и подтверждение оценки.
 paths:
   /csrf:
     get:
@@ -277,7 +277,7 @@ paths:
     get:
       operationId: listParticipants
       tags: [Участники]
-      summary: Выбрать владельца риска
+      summary: Получить список активных участников
       responses:
         '200':
           description: ID и имена активных участников
@@ -316,11 +316,17 @@ paths:
           in: query
           description: Поиск по названию, причине, возможному событию и последствиям для продукта
           schema: { type: string }
-        - name: ownerId
+        - name: assignee
           in: query
-          description: Фильтр по ID владельца
+          description: |
+            UUID фильтрует active и archive по текущему назначению.
+            Значение needs-assignment доступно только в active и включает риски без
+            ответственного или с отключённым ответственным по текущим данным аккаунта.
           schema:
-            $ref: '#/components/schemas/Id'
+            oneOf:
+              - $ref: '#/components/schemas/Id'
+              - type: string
+                const: needs-assignment
         - name: category
           in: query
           description: Фильтр по категории приоритета
@@ -346,7 +352,7 @@ paths:
       tags: [Риски]
       summary: Создать риск и его первый черновик
       description: |
-        Доступно любому активному участнику. Пропущенный ownerId заполняется ID автора.
+        Доступно любому активному участнику.
         Риск получает постоянный ID, а черновик получает собственный ID и номер изменения 1.
       security:
         - SessionCookie: []
@@ -381,7 +387,8 @@ paths:
       summary: Прочитать опубликованную карточку
       description: |
         Доступно всем активным участникам после первой публикации, включая архив.
-        Все видят наличие незавершённой правки. Если правку создал другой участник,
+        В карточке видны автор первого утверждённого предложения, текущее назначение
+        и наличие незавершённой правки. Если правку создал другой участник,
         ревьюер дополнительно получает метаданные для её разблокировки.
       responses:
         '200':
@@ -406,7 +413,8 @@ paths:
       summary: Прочитать доступную историю риска
       description: |
         После публикации общая история содержит утверждённые снимки и события
-        утверждения и подтверждения оценки. История предложения доступна автору,
+        утверждения, подтверждения оценки, изменения и переноса назначения.
+        История предложения доступна автору,
         а ревьюерам — после отправки предложения, включая возврат, отзыв и закрытие.
         События и содержимое приватного черновика доступны в истории только автору,
         включая результат разблокировки чужого черновика. Если риск ещё не опубликован
@@ -424,6 +432,217 @@ paths:
           $ref: '#/components/responses/Forbidden'
         '404':
           $ref: '#/components/responses/NotFound'
+
+  /risks/{id}/occurrences:
+    parameters:
+      - $ref: '#/components/parameters/RiskId'
+    get:
+      operationId: listRiskOccurrences
+      tags: [Риски]
+      summary: Получить страницу случаев проявления риска
+      description: |
+        Доступно любому активному участнику для опубликованного риска, включая архив.
+        Записи отсортированы по убыванию времени создания, затем по убыванию ID.
+        Для отсутствующего или неопубликованного риска возвращается 404.
+      parameters:
+        - name: cursor
+          in: query
+          description: Непрозрачный nextCursor предыдущей страницы. Без него возвращается первая страница.
+          schema:
+            $ref: '#/components/schemas/RiskOccurrenceCursor'
+      responses:
+        '200':
+          description: До 20 случаев и курсор следующей страницы
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RiskOccurrencePage'
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    post:
+      operationId: createRiskOccurrence
+      tags: [Риски]
+      summary: Добавить случай проявления риска
+      description: |
+        Доступно любому активному участнику для активного опубликованного риска,
+        в том числе при открытой правке. Повторы текста и ссылок допускаются.
+        Запись сразу видна команде и сохраняется при публикации новой версии риска.
+        Автором становится текущий участник. Начальная ревизия равна 1.
+        Статус, приоритет, дата оценки и срок пересмотра риска сохраняются.
+        Отсутствующий или неопубликованный риск даёт 404, архивный — 409 RISK_CONFLICT.
+      security:
+        - SessionCookie: []
+          CsrfHeader: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateRiskOccurrenceRequest'
+      responses:
+        '201':
+          description: Созданный случай
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RiskOccurrence'
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/ForbiddenOrCsrfRejected'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/RiskConflict'
+
+  /risks/{id}/occurrences/{occurrenceId}:
+    parameters:
+      - $ref: '#/components/parameters/RiskId'
+      - name: occurrenceId
+        in: path
+        required: true
+        description: ID случая, принадлежащего указанному риску
+        schema:
+          $ref: '#/components/schemas/Id'
+    patch:
+      operationId: updateRiskOccurrence
+      tags: [Риски]
+      summary: Исправить случай проявления риска
+      description: |
+        Доступно активному автору записи, ревьюеру или администратору для активного
+        опубликованного риска. При успехе обновляется содержимое и увеличивается
+        ревизия. Автор и время создания сохраняются. Событие в историю риска не добавляется.
+        Отсутствующий или неопубликованный риск и отсутствующий у этого риска случай
+        дают 404. Для чужого случая без нужной роли возвращается 403. Архивный риск
+        или устаревшая ревизия дают 409 RISK_CONFLICT.
+      security:
+        - SessionCookie: []
+          CsrfHeader: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateRiskOccurrenceRequest'
+      responses:
+        '200':
+          description: Исправленный случай
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RiskOccurrence'
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/ForbiddenOrCsrfRejected'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/RiskConflict'
+    delete:
+      operationId: deleteRiskOccurrence
+      tags: [Риски]
+      summary: Удалить случай проявления риска
+      description: |
+        Доступно активному автору записи, ревьюеру или администратору для активного
+        опубликованного риска. Событие в историю риска не добавляется.
+        Отсутствующий или неопубликованный риск и отсутствующий у этого риска случай
+        дают 404. Для чужого случая без нужной роли возвращается 403. Архивный риск
+        или устаревшая ревизия дают 409 RISK_CONFLICT.
+      security:
+        - SessionCookie: []
+          CsrfHeader: []
+      parameters:
+        - name: expectedRevision
+          in: query
+          required: true
+          description: Ревизия случая, которую видел участник перед удалением.
+          schema:
+            $ref: '#/components/schemas/RiskOccurrenceRevision'
+      responses:
+        '204':
+          description: Случай удалён
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/ForbiddenOrCsrfRejected'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/RiskConflict'
+
+  /risks/{id}/assignment:
+    parameters:
+      - $ref: '#/components/parameters/RiskId'
+    patch:
+      operationId: updateRiskAssignment
+      tags: [Риски]
+      summary: Назначить, заменить или снять ответственного
+      description: |
+        Доступно ревьюеру или администратору для опубликованного активного риска.
+        Можно назначить любого активного участника, включая автора первого предложения.
+        Для отсутствующего или неопубликованного риска возвращается 404.
+        Архивный риск и устаревшая ревизия дают 409 RISK_CONFLICT. Ревизия проверяется
+        до сравнения с текущим назначением. Недоступный или отключённый кандидат
+        даёт 409 ASSIGNEE_INACTIVE.
+
+        При актуальной ревизии и совпадающем значении возвращается карточка без
+        изменения ревизии и истории. При изменении назначение сохраняется вместе
+        с новой ревизией и событием истории. Опубликованная версия, открытая правка,
+        дата оценки и срок пересмотра сохраняются.
+      security:
+        - SessionCookie: []
+          CsrfHeader: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateRiskAssignmentRequest'
+      responses:
+        '200':
+          description: Опубликованная карточка с текущим назначением и его ревизией
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PublishedRisk'
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/ForbiddenOrCsrfRejected'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: Риск архивирован, ревизия устарела или кандидат недоступен для назначения
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Error'
+                required: [code]
+                properties:
+                  code: { type: string, enum: [RISK_CONFLICT, ASSIGNEE_INACTIVE] }
+              examples:
+                riskConflict:
+                  $ref: '#/components/examples/RiskConflict'
+                assigneeInactive:
+                  value:
+                    code: ASSIGNEE_INACTIVE
+                    message: Выберите активного участника.
 
   /risks/{id}/draft:
     parameters:
@@ -529,13 +748,13 @@ paths:
       summary: Выполнить действие над предложением
       description: |
         - submit — автор отправляет DRAFT или RETURNED с заполненными названием,
-          причиной, возможным событием, последствиями для продукта, владельцем и оценками.
+          причиной, возможным событием, последствиями для продукта и оценками.
         - return — ревьюер возвращает IN_REVIEW автору. Требуется непустой comment.
         - approve — ревьюер утверждает IN_REVIEW, включая собственное предложение.
-          Первая публикация и смена владельца требуют активного владельца на момент
-          одобрения. Прежний отключённый владелец допускается. Завершение риска требует
-          причины в closureReason. При успехе ни один утверждённый снимок не меняется,
-          а указатель публикации переключается на утверждаемую версию.
+          Риск впервые публикуется без ответственного. Утверждение правки, включая
+          завершение риска, сохраняет текущее назначение и его ревизию. Завершение
+          требует причины в closureReason. При успехе указатель публикации переключается
+          на утверждаемую версию, а прежние утверждённые снимки сохраняются.
         - withdraw — автор отзывает DRAFT, IN_REVIEW или RETURNED. Для первого
           предложения повторная подача начинается с нового риска.
         - unblock — ревьюер закрывает чужую незавершённую правку или первое предложение
@@ -569,18 +788,7 @@ paths:
         '404':
           $ref: '#/components/responses/NotFound'
         '409':
-          description: Версия устарела, переход недоступен или новый владелец отключён
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-              examples:
-                staleVersion:
-                  $ref: '#/components/examples/RiskConflict'
-                ownerInactive:
-                  value:
-                    code: OWNER_INACTIVE
-                    message: Верните предложение автору, чтобы он выбрал активного владельца.
+          $ref: '#/components/responses/RiskConflict'
 
   /risks/{id}/assessment/confirm:
     parameters:
@@ -734,7 +942,7 @@ components:
             $ref: '#/components/schemas/Error'
           example: { code: NOT_FOUND, message: Запись не найдена. }
     RiskConflict:
-      description: Снимок или версия устарели либо состояние риска не позволяет действие
+      description: Снимок, версия или ревизия устарели либо состояние риска не позволяет действие
       content:
         application/json:
           schema:
@@ -877,7 +1085,7 @@ components:
           $ref: '#/components/schemas/Id'
         displayName:
           $ref: '#/components/schemas/NonBlankText'
-    Owner:
+    Assignee:
       type: object
       additionalProperties: false
       required: [id, displayName, active]
@@ -888,7 +1096,101 @@ components:
           $ref: '#/components/schemas/NonBlankText'
         active:
           type: boolean
-          description: При false интерфейс показывает пометку «Отключён».
+          description: Текущая активность аккаунта.
+    AssignmentRevision:
+      type: integer
+      format: int64
+      minimum: 1
+      description: Начинается с 1 и увеличивается только при изменении назначения.
+    UpdateRiskAssignmentRequest:
+      type: object
+      additionalProperties: false
+      required: [assigneeId, expectedAssignmentRevision]
+      properties:
+        assigneeId:
+          type: [string, 'null']
+          format: uuid
+          description: ID активного участника или null для снятия назначения.
+        expectedAssignmentRevision:
+          $ref: '#/components/schemas/AssignmentRevision'
+    RiskOccurrenceRevision:
+      type: integer
+      format: int64
+      minimum: 1
+      description: Ревизия случая начинается с 1 и увеличивается при исправлении.
+    RiskOccurrenceCursor:
+      type: string
+      minLength: 1
+      description: Непрозрачный указатель позиции в списке. Недопустимый курсор даёт 400.
+    RiskOccurrenceUrl:
+      type: string
+      format: uri
+      pattern: '^[Hh][Tt][Tt][Pp][Ss]?://(?:[^/?#@]*@)?(?:\[[^\]]+\]|[^\s:/?#@\[\]]+)(?::[0-9]*)?(?:[/?#]|$)'
+      description: Абсолютный HTTP- или HTTPS-адрес с хостом.
+    RiskOccurrenceContent:
+      type: object
+      description: Должен быть задан непустой текст, ссылка или оба поля.
+      properties:
+        text:
+          anyOf:
+            - $ref: '#/components/schemas/NonBlankText'
+            - type: 'null'
+        url:
+          anyOf:
+            - $ref: '#/components/schemas/RiskOccurrenceUrl'
+            - type: 'null'
+      allOf:
+        - anyOf:
+            - required: [text]
+              properties:
+                text: { type: string }
+            - required: [url]
+              properties:
+                url: { type: string }
+    CreateRiskOccurrenceRequest:
+      $ref: '#/components/schemas/RiskOccurrenceContent'
+      unevaluatedProperties: false
+    UpdateRiskOccurrenceRequest:
+      description: Полная замена содержимого случая. Пропущенное поле или null удаляет его значение.
+      allOf:
+        - $ref: '#/components/schemas/RiskOccurrenceContent'
+      required: [expectedRevision]
+      properties:
+        expectedRevision:
+          $ref: '#/components/schemas/RiskOccurrenceRevision'
+      unevaluatedProperties: false
+    RiskOccurrence:
+      allOf:
+        - $ref: '#/components/schemas/RiskOccurrenceContent'
+      required: [id, text, url, author, createdAt, revision]
+      properties:
+        id:
+          $ref: '#/components/schemas/Id'
+        author:
+          $ref: '#/components/schemas/Participant'
+        createdAt:
+          type: string
+          format: date-time
+          pattern: 'Z$'
+          description: Время создания в UTC.
+        revision:
+          $ref: '#/components/schemas/RiskOccurrenceRevision'
+      unevaluatedProperties: false
+    RiskOccurrencePage:
+      type: object
+      additionalProperties: false
+      required: [items, nextCursor]
+      properties:
+        items:
+          type: array
+          maxItems: 20
+          items:
+            $ref: '#/components/schemas/RiskOccurrence'
+        nextCursor:
+          description: Курсор следующей страницы или null, если список закончился.
+          anyOf:
+            - $ref: '#/components/schemas/RiskOccurrenceCursor'
+            - type: 'null'
     DraftFields:
       type: object
       additionalProperties: false
@@ -897,7 +1199,6 @@ components:
         cause: { type: [string, 'null'] }
         possibleEvent: { type: [string, 'null'] }
         productConsequences: { type: [string, 'null'] }
-        ownerId: { type: [string, 'null'], format: uuid }
         likelihood: { type: [integer, 'null'], minimum: 1, maximum: 10 }
         impact: { type: [integer, 'null'], minimum: 1, maximum: 10 }
         decisionNote: { type: [string, 'null'] }
@@ -957,7 +1258,7 @@ components:
     ProposalFields:
       allOf:
         - $ref: '#/components/schemas/DraftFields'
-      required: [title, cause, possibleEvent, productConsequences, ownerId, likelihood, impact, decisionNote, trackerUrl, riskState, closureReason]
+      required: [title, cause, possibleEvent, productConsequences, likelihood, impact, decisionNote, trackerUrl, riskState, closureReason]
     ProposalList:
       type: object
       additionalProperties: false
@@ -995,7 +1296,7 @@ components:
     PublishedRiskSummary:
       type: object
       additionalProperties: false
-      required: [riskId, publishedVersionId, title, owner, likelihood, impact, priority, riskState, assessment, hasOpenDraft]
+      required: [riskId, publishedVersionId, title, assignee, likelihood, impact, priority, riskState, assessment, hasOpenDraft]
       properties:
         riskId:
           $ref: '#/components/schemas/Id'
@@ -1003,8 +1304,10 @@ components:
           $ref: '#/components/schemas/Id'
         title:
           $ref: '#/components/schemas/NonBlankText'
-        owner:
-          $ref: '#/components/schemas/Owner'
+        assignee:
+          anyOf:
+            - $ref: '#/components/schemas/Assignee'
+            - type: 'null'
         likelihood:
           $ref: '#/components/schemas/ScoreInput'
         impact:
@@ -1035,10 +1338,9 @@ components:
         category:
           $ref: '#/components/schemas/Category'
         criticalImpact: { type: boolean, description: true при влиянии 9 или 10. }
-    PublishedSnapshot:
+    PublishedSnapshotFields:
       type: object
-      additionalProperties: false
-      required: [versionId, title, cause, possibleEvent, productConsequences, owner, likelihood, impact, priority, riskState]
+      required: [versionId, title, cause, possibleEvent, productConsequences, likelihood, impact, priority, riskState]
       properties:
         versionId:
           $ref: '#/components/schemas/Id'
@@ -1050,8 +1352,6 @@ components:
           $ref: '#/components/schemas/NonBlankText'
         productConsequences:
           $ref: '#/components/schemas/NonBlankText'
-        owner:
-          $ref: '#/components/schemas/Owner'
         likelihood:
           $ref: '#/components/schemas/ScoreInput'
         impact:
@@ -1071,15 +1371,38 @@ components:
         properties:
           closureReason:
             $ref: '#/components/schemas/NonBlankText'
+    PublishedSnapshot:
+      $ref: '#/components/schemas/PublishedSnapshotFields'
+      unevaluatedProperties: false
+    HistoricalPublishedSnapshot:
+      allOf:
+        - $ref: '#/components/schemas/PublishedSnapshotFields'
+      required: [owner]
+      properties:
+        owner:
+          description: Прежний владелец опубликованной версии. В новых версиях поле равно null.
+          anyOf:
+            - $ref: '#/components/schemas/Assignee'
+            - type: 'null'
+      unevaluatedProperties: false
     PublishedRisk:
       type: object
       additionalProperties: false
-      required: [riskId, snapshot, assessment, hasOpenDraft]
+      required: [riskId, snapshot, author, assignee, assignmentRevision, assessment, hasOpenDraft]
       properties:
         riskId:
           $ref: '#/components/schemas/Id'
         snapshot:
           $ref: '#/components/schemas/PublishedSnapshot'
+        author:
+          $ref: '#/components/schemas/Participant'
+          description: Автор первого утверждённого предложения по риску.
+        assignee:
+          anyOf:
+            - $ref: '#/components/schemas/Assignee'
+            - type: 'null'
+        assignmentRevision:
+          $ref: '#/components/schemas/AssignmentRevision'
         assessment:
           $ref: '#/components/schemas/Assessment'
         hasOpenDraft: { type: boolean }
@@ -1099,13 +1422,49 @@ components:
       properties:
         versionId:
           $ref: '#/components/schemas/Id'
+          description: Для событий назначения это версия, опубликованная на момент события.
         actor:
-          $ref: '#/components/schemas/Participant'
+          description: Инициатор события. При системном переносе значение равно null.
+          anyOf:
+            - $ref: '#/components/schemas/Participant'
+            - type: 'null'
         action:
           type: string
-          enum: [SUBMIT, RETURN, APPROVE, WITHDRAW, UNBLOCK, CONFIRM_ASSESSMENT]
+          enum: [SUBMIT, RETURN, APPROVE, WITHDRAW, UNBLOCK, CONFIRM_ASSESSMENT, ASSIGNMENT_CHANGED, ASSIGNMENT_MIGRATED]
+          description: ASSIGNMENT_MIGRATED обозначает системный перенос из прежнего реестра.
         occurredAt: { type: string, format: date-time }
         comment: { type: [string, 'null'] }
+        previousAssignee:
+          anyOf:
+            - $ref: '#/components/schemas/Participant'
+            - type: 'null'
+        newAssignee:
+          anyOf:
+            - $ref: '#/components/schemas/Participant'
+            - type: 'null'
+      allOf:
+        - if:
+            properties:
+              action: { enum: [ASSIGNMENT_CHANGED, ASSIGNMENT_MIGRATED] }
+          then:
+            required: [previousAssignee, newAssignee]
+          else:
+            properties:
+              previousAssignee: false
+              newAssignee: false
+        - if:
+            properties:
+              action: { const: ASSIGNMENT_MIGRATED }
+          then:
+            properties:
+              actor: { type: 'null' }
+              previousAssignee: { type: 'null' }
+              newAssignee:
+                $ref: '#/components/schemas/Participant'
+          else:
+            properties:
+              actor:
+                $ref: '#/components/schemas/Participant'
     RiskHistory:
       type: object
       additionalProperties: false
@@ -1116,7 +1475,7 @@ components:
         publishedVersions:
           type: array
           items:
-            $ref: '#/components/schemas/PublishedSnapshot'
+            $ref: '#/components/schemas/HistoricalPublishedSnapshot'
         events:
           type: array
           items:

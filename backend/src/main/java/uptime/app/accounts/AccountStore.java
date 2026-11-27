@@ -63,11 +63,11 @@ class AccountStore {
         return jdbc.sql("SELECT * FROM accounts ORDER BY display_name, id").query(AccountStore::account).list();
     }
 
-    Optional<AccountDirectory.Owner> findOwner(UUID id, boolean lock) {
+    Optional<AccountDirectory.Participant> findParticipant(UUID id, boolean lock) {
         String select = "SELECT id, display_name, active FROM accounts WHERE id = ?";
         return jdbc.sql(lock ? select + " FOR SHARE" : select)
                 .param(id)
-                .query((row, index) -> new AccountDirectory.Owner(
+                .query((row, index) -> new AccountDirectory.Participant(
                         row.getObject("id", UUID.class), row.getString("display_name"), row.getBoolean("active")))
                 .optional();
     }

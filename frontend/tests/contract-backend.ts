@@ -72,6 +72,15 @@ const endpoints = Object.entries(document.paths).flatMap(([template, item]) =>
 const route = (template: string, path?: Record<string, string>) =>
   template.replace(/\{(\w+)\}/g, (_, key: string) => encodeURIComponent(path?.[key] ?? ""));
 
+export function verifyResponse(operationId: keyof operations, status: number, body: unknown) {
+  const operation = endpoints.find(({ operation }) => operation.operationId === operationId)!.operation;
+  const response = operation.responses[status];
+  assert.ok(response, `Undocumented response status ${status}`);
+  const content = resolve<Content>(response).content;
+  if (content) validate(content["application/json"].schema, body, `${operationId} response body`);
+  else assert.equal(body, undefined);
+}
+
 async function verify(request: IncomingMessage, exchange: Exchange, url: URL) {
   const { operation, parameters: inherited } = endpoints.find(({ operation }) => operation.operationId === exchange.operation)!;
   assert.equal(request.headers.cookie, exchange.cookie);
@@ -85,7 +94,9 @@ async function verify(request: IncomingMessage, exchange: Exchange, url: URL) {
     for (const [key, value] of Object.entries(values)) {
       const parameter = parameters.find(({ name, in: where }) => name === key && where === location);
       assert.ok(parameter, `Undocumented ${location} parameter ${key}`);
-      validate(parameter.schema, value, key);
+      const { type } = resolve(parameter.schema as Schema | Ref);
+      const numeric = type === "integer" || type === "number";
+      validate(parameter.schema, numeric && value.trim() ? Number(value) : value, key);
     }
     for (const parameter of parameters.filter((item) => item.in === location && item.required)) {
       assert.ok(Object.hasOwn(values, parameter.name), `Missing parameter ${parameter.name}`);
@@ -107,11 +118,7 @@ async function verify(request: IncomingMessage, exchange: Exchange, url: URL) {
     assert.equal(exchange.body, undefined);
   }
 
-  const response = operation.responses[exchange.status];
-  assert.ok(response, `Undocumented response status ${exchange.status}`);
-  const content = resolve<Content>(response).content;
-  if (content) validate(content["application/json"].schema, exchange.reply, "Mock response body");
-  else assert.equal(exchange.reply, undefined);
+  verifyResponse(exchange.operation, exchange.status, exchange.reply);
 }
 
 export async function contractBackend() {

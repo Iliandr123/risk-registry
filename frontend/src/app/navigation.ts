@@ -16,9 +16,11 @@ export const sections: { id: View; label: string; icon: string }[] = [
 export function registerUrl(view: RegisterView, query: Query) {
   const params = new URLSearchParams({ view });
   if (view === "active" || view === "archive") {
-    for (const name of ["q", "ownerId", "category"]) {
+    for (const name of ["q", "assignee", "category"]) {
       const value = query[name];
-      if (typeof value === "string" && value.trim()) params.set(name, value.trim());
+      if (typeof value !== "string" || !value.trim()) continue;
+      if (view === "archive" && name === "assignee" && value.trim() === "needs-assignment") continue;
+      params.set(name, value.trim());
     }
   }
   return params;

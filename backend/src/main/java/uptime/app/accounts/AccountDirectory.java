@@ -8,12 +8,12 @@ public interface AccountDirectory {
 
     void requireSessionCsrf(String sessionToken, String csrfToken);
 
-    Optional<Owner> findOwner(UUID id);
+    Optional<Participant> findParticipant(UUID id);
 
-    /** Holds the owner's row until the calling transaction ends. */
-    Optional<Owner> lockOwner(UUID id);
+    /** Holds a shared lock on the participant's row until the calling transaction ends. */
+    Optional<Participant> lockParticipant(UUID id);
 
-    record Member(UUID id, boolean reviewer, boolean mustChangePassword) {}
+    record Member(UUID id, boolean reviewer, boolean admin, boolean mustChangePassword) {}
 
-    record Owner(UUID id, String displayName, boolean active) {}
+    record Participant(UUID id, String displayName, boolean active) {}
 }

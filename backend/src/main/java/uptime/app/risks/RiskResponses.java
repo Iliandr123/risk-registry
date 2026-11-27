@@ -1,11 +1,12 @@
 package uptime.app.risks;
 
 import com.fasterxml.jackson.annotation.JsonInclude;
+import com.fasterxml.jackson.annotation.JsonUnwrapped;
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.UUID;
-import uptime.app.accounts.AccountDirectory.Owner;
+import uptime.app.accounts.AccountDirectory;
 import uptime.app.risks.DraftFields.RiskState;
 import uptime.app.risks.RiskStore.EventAction;
 import uptime.app.risks.RiskVersion.Status;
@@ -45,19 +46,28 @@ final class RiskResponses {
         }
     }
 
-    record Summary(UUID riskId, UUID publishedVersionId, String title, Owner owner, int likelihood,
+    record Summary(UUID riskId, UUID publishedVersionId, String title, AccountDirectory.Participant assignee, int likelihood,
                    int impact, Priority priority, RiskState riskState, Assessment assessment, boolean hasOpenDraft) {}
 
     record Snapshot(UUID versionId, String title, String cause, String possibleEvent, String productConsequences,
-                    Owner owner, int likelihood, int impact, Priority priority, String decisionNote,
+                    int likelihood, int impact, Priority priority, String decisionNote,
                     String trackerUrl, RiskState riskState, String closureReason) {}
+
+    record HistoricalSnapshot(@JsonUnwrapped Snapshot snapshot, AccountDirectory.Participant owner) {}
 
     record Unblock(UUID versionId, long revision, String authorDisplayName) {}
 
-    record Published(UUID riskId, Snapshot snapshot, Assessment assessment, boolean hasOpenDraft,
+    record Published(UUID riskId, Snapshot snapshot, Participant author, AccountDirectory.Participant assignee,
+                     long assignmentRevision, Assessment assessment, boolean hasOpenDraft,
                      @JsonInclude(JsonInclude.Include.NON_NULL) Unblock unblock) {}
 
-    record Event(UUID versionId, Participant actor, EventAction action, OffsetDateTime occurredAt, String comment) {}
+    interface Event {}
 
-    record History(UUID riskId, List<Snapshot> publishedVersions, List<Event> events) {}
+    record WorkflowEvent(UUID versionId, Participant actor, EventAction action, OffsetDateTime occurredAt,
+                         String comment) implements Event {}
+
+    record AssignmentEvent(UUID versionId, Participant actor, EventAction action, OffsetDateTime occurredAt,
+                           Participant previousAssignee, Participant newAssignee) implements Event {}
+
+    record History(UUID riskId, List<HistoricalSnapshot> publishedVersions, List<Event> events) {}
 }

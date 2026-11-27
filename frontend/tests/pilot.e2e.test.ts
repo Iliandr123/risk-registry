@@ -101,7 +101,7 @@ test("рабочий пилот: первый вход, роли, отзыв с�
 
     await button(author, "＋ Предложить риск").click();
     await author.getByLabel("Название *", { exact: true }).fill(title);
-    assert.equal(await author.getByRole("combobox", { name: /^Владелец/ }).locator("option:checked").innerText(), authorName);
+    assert.equal(await author.getByLabel(/Владелец|Ответственный/).count(), 0);
     await button(author, "Сохранить черновик").click();
     await text(author, "Черновик сохранён.").waitFor();
     const riskId = await author.locator(".card-id code").innerText();
@@ -145,17 +145,29 @@ test("рабочий пилот: первый вход, роли, отзыв с�
     await openListedRisk(reviewer, "На ревью", title);
     await button(reviewer, "Утвердить").click();
     await text(reviewer, "Версия утверждена.").waitFor();
+    await reviewer.reload();
+    await text(reviewer, "Не назначен").waitFor();
+    await button(reviewer, "Назначить ответственного").click();
+    await reviewer.getByLabel("Выбор ответственного").selectOption({ label: authorName });
+    await button(reviewer, "Сохранить назначение").click();
+    await text(reviewer, `Не назначен → ${authorName}`).waitFor();
 
     await link(author.getByRole("navigation"), "Активные риски").click();
     await author.getByLabel("Поиск").fill("превышает два дня");
     await author.getByLabel("Категория").selectOption("LOW");
-    await author.getByLabel("Владелец").selectOption({ label: authorName });
+    await author.getByLabel("Ответственный").selectOption({ label: authorName });
     await button(author, "Найти").click();
     await link(author, title).waitFor();
     if (process.env.PILOT_SCREENSHOT) await author.screenshot({ path: process.env.PILOT_SCREENSHOT, fullPage: true });
     await link(author, title).click();
     await text(author, note).first().waitFor();
     await button(author, "Предложить правку").click();
+    const occurrences = (page: Page) => page.getByRole("region", { name: "Случаи проявления риска" });
+    const occurrence = "Сортировка заявок заняла два дня.";
+    await button(occurrences(author), "Добавить случай").click();
+    await occurrences(author).getByLabel("Описание случая").fill(occurrence);
+    await button(occurrences(author), "Сохранить случай").click();
+    await text(occurrences(author), occurrence).waitFor();
     await author.getByLabel("Решение и меры", { exact: true }).fill("Установлена автоматическая сортировка заявок.");
     await author.getByLabel("Состояние риска").selectOption("REMOVED");
     await author.getByLabel("Причина завершения *", { exact: true }).fill("Ручная очередь устранена.");
@@ -167,9 +179,13 @@ test("рабочий пилот: первый вход, роли, отзыв с�
     await button(reviewer, "Подтвердить оценку").click();
     await text(reviewer, "Оценка подтверждена.").waitFor();
     await openListedRisk(reviewer, "На ревью", title);
+    await text(occurrences(reviewer), occurrence).waitFor();
+    await button(occurrences(reviewer), "Исправить").waitFor();
     await button(reviewer, "Утвердить").click();
     await text(reviewer, "Версия утверждена.").waitFor();
     await openListedRisk(author, "Архив", title);
+    await text(occurrences(author), occurrence).waitFor();
+    assert.equal(await occurrences(author).getByRole("button", { name: /Добавить случай|Исправить|Удалить/ }).count(), 0);
     await text(author, "Ручная очередь устранена.").first().waitFor();
     await author.locator("summary").filter({ hasText: `Версия 1 · ${title}` }).click();
     await text(author.locator("details[open]"), note).waitFor();

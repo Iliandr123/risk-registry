@@ -1,7 +1,9 @@
-import { ifVisible, type Api, type Proposal, type PublishedRisk, type RiskHistory } from "./api";
+import { ifVisible, type Api, type Proposal, type PublishedRisk, type RiskHistory, type RiskOccurrencePage } from "./api";
 
 export type Selection = { riskId: string; proposal?: Proposal };
-export type Card = { published: PublishedRisk | null; draft: Proposal | null; history: RiskHistory | null };
+export type Card =
+  { draft: Proposal | null; history: RiskHistory | null }
+  & ({ published: PublishedRisk; occurrences: RiskOccurrencePage } | { published: null; occurrences: null });
 
 export async function readCard(api: Api, { riskId, proposal }: Selection, accountId: string): Promise<Card> {
   const [published, current, history] = await Promise.all([
@@ -12,5 +14,6 @@ export async function readCard(api: Api, { riskId, proposal }: Selection, accoun
     const mine = await api.risks(new URLSearchParams({ view: "mine" }));
     if (mine.view === "mine") draft = mine.items.find((item) => item.versionId === proposal.versionId) ?? null;
   }
-  return { published, draft, history };
+  if (!published) return { published, draft, history, occurrences: null };
+  return { published, draft, history, occurrences: await api.occurrences(riskId) };
 }

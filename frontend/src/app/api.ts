@@ -18,9 +18,12 @@ export type Fields = Schemas["ProposalFields"];
 export type Identity = Schemas["DraftActionResult"];
 export type Proposal = Schemas["Proposal"];
 export type Priority = Schemas["Priority"];
-export type Owner = Schemas["Owner"];
+export type Assignee = Schemas["Assignee"];
 export type PublishedRisk = Schemas["PublishedRisk"];
 export type RiskHistory = Schemas["RiskHistory"];
+export type RiskOccurrence = Schemas["RiskOccurrence"];
+export type RiskOccurrencePage = Schemas["RiskOccurrencePage"];
+export type RiskOccurrenceContent = Body<"createRiskOccurrence">;
 export type RiskList = operations["listRisks"]["responses"][200]["content"]["application/json"];
 type Version = Pick<Identity, "versionId" | "revision">;
 
@@ -69,6 +72,9 @@ export function createApi(onSessionEnded: () => void, transport: (path: string, 
   }
 
   const riskPath = (id: string) => `/risks/${encodeURIComponent(id)}`;
+  const occurrencesPath = (id: string) => `${riskPath(id)}/occurrences`;
+  const occurrencePath = (id: string, occurrenceId: string) =>
+    `${occurrencesPath(id)}/${encodeURIComponent(occurrenceId)}`;
   return {
     profile: (signal?: AbortSignal) => request<Account>("/me", "GET", undefined, signal),
     signIn: (login: string, password: string) => request<Account>("/session", "POST", { login, password } satisfies Body<"createSession">),
@@ -85,7 +91,18 @@ export function createApi(onSessionEnded: () => void, transport: (path: string, 
     risks: (query: URLSearchParams, signal?: AbortSignal) =>
       request<RiskList>(`/risks?${query}`, "GET", undefined, signal),
     risk: (id: string) => request<PublishedRisk>(riskPath(id)),
+    assign: (id: string, assignment: Body<"updateRiskAssignment">) =>
+      request<PublishedRisk>(`${riskPath(id)}/assignment`, "PATCH", assignment),
     history: (id: string) => request<RiskHistory>(`${riskPath(id)}/history`),
+    occurrences: (id: string, cursor?: string) =>
+      request<RiskOccurrencePage>(occurrencesPath(id) + (cursor === undefined ? "" : `?${new URLSearchParams({ cursor })}`)),
+    createOccurrence: (id: string, fields: RiskOccurrenceContent) =>
+      request<RiskOccurrence>(occurrencesPath(id), "POST", fields),
+    updateOccurrence: (id: string, occurrence: RiskOccurrence, fields: RiskOccurrenceContent) =>
+      request<RiskOccurrence>(occurrencePath(id, occurrence.id), "PATCH",
+        { ...fields, expectedRevision: occurrence.revision } satisfies Body<"updateRiskOccurrence">),
+    deleteOccurrence: (id: string, occurrence: RiskOccurrence) =>
+      request<void>(`${occurrencePath(id, occurrence.id)}?expectedRevision=${occurrence.revision}`, "DELETE"),
     draft: (id: string) => request<Proposal>(`${riskPath(id)}/draft`),
     createRisk: () => request<Proposal>("/risks", "POST", {}),
     openDraft: (id: string, expectedPublishedVersionId: string) =>

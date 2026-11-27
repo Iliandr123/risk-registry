@@ -1,9 +1,15 @@
 import { useEffect, useState } from "react";
-import { errorMessage, type Account, type Api, type Owner, type Participant, type RiskList } from "./api";
+import { errorMessage, type Account, type Api, type Assignee, type Participant, type RiskList } from "./api";
 import { RiskCard } from "./risk-card";
 import type { Card, Selection } from "./read-card";
 import { registerUrl, type RegisterView } from "./navigation";
-import { categories, dateLabel, OwnerName, PriorityBadge, proposalStatuses, riskStates } from "./risk-fields";
+import { AssigneeName, categories, dateLabel, PriorityBadge, proposalStatuses, riskStates } from "./risk-fields";
+
+function listedAssignees(list: RiskList) {
+  return list.view === "active" || list.view === "archive"
+    ? list.items.flatMap(({ assignee }) => assignee ? [[assignee.id, assignee] as const] : [])
+    : [];
+}
 
 export type InitialRegister = {
   list: RiskList;
@@ -21,7 +27,7 @@ export function Register({ api, account, view, onViewChange, label, initial }: {
   const [selection, setSelection] = useState<Selection | null>(initial.selection ?? null);
   const [participants, setParticipants] = useState(initial.participants);
   const [list, setList] = useState(initial.list);
-  const [knownOwners, setKnownOwners] = useState<Map<string, Owner>>(new Map());
+  const [knownAssignees, setKnownAssignees] = useState(() => new Map<string, Assignee>(listedAssignees(initial.list)));
   const [error, setError] = useState("");
   const [listError, setListError] = useState("");
   const [message, setMessage] = useState("");
@@ -46,10 +52,7 @@ export function Register({ api, account, view, onViewChange, label, initial }: {
       if (!controller.signal.aborted) {
         setList(data);
         setListError("");
-        if (data.view === "active" || data.view === "archive") {
-          const owners = data.items.map(({ owner }) => [owner.id, owner] as const);
-          setKnownOwners((previous) => new Map([...previous, ...owners]));
-        }
+        setKnownAssignees((previous) => new Map([...previous, ...listedAssignees(data)]));
       }
     }).catch((error) => {
       if (!controller.signal.aborted) setListError(errorMessage(error));
@@ -74,6 +77,9 @@ export function Register({ api, account, view, onViewChange, label, initial }: {
   }
 
   function update(next: Selection, message: string, refreshCard = true) {
+    if (initial.selection?.proposal && selection?.proposal && !next.proposal) {
+      window.history.replaceState(null, "", riskLink(next.riskId));
+    }
     setSelection(next);
     setMessage(message);
     setPeriod((previous) => previous + 1);
@@ -88,16 +94,13 @@ export function Register({ api, account, view, onViewChange, label, initial }: {
   }
 
   const currentList = list.view === view ? list : null;
-  const owners = new Map(Array.from(knownOwners, ([id, owner]) => [
-    id, owner.displayName + (owner.active ? "" : " (Отключён)"),
+  const assignees = new Map(Array.from(knownAssignees, ([id, assignee]) => [
+    id, assignee.displayName + (assignee.active ? "" : " (Требуется замена)"),
   ]));
-  if (currentList?.view === "active" || currentList?.view === "archive") {
-    for (const { owner } of currentList.items) {
-      owners.set(owner.id, owner.displayName + (owner.active ? "" : " (Отключён)"));
-    }
+  for (const { id, displayName } of participants) assignees.set(id, displayName);
+  if (filters.assignee && filters.assignee !== "needs-assignment" && !assignees.has(filters.assignee)) {
+    assignees.set(filters.assignee, "Выбранный ответственный");
   }
-  for (const { id, displayName } of participants) owners.set(id, displayName);
-  if (filters.ownerId && !owners.has(filters.ownerId)) owners.set(filters.ownerId, "Выбранный владелец");
 
   return <>
     <header className="page-header">
@@ -111,14 +114,16 @@ export function Register({ api, account, view, onViewChange, label, initial }: {
       {!initial.selection && <button className="quiet back" onClick={() => { setSelection(null); setMessage(""); }}>← К списку</button>}
       <RiskCard key={`${selection.riskId}/${selection.proposal?.versionId ?? "published"}/${cardPeriod}`}
         initial={cardPeriod === 0 && selection === initial.selection ? initial.card : undefined}
-        api={api} selection={selection} account={account} participants={participants} onUpdate={update} />
+        api={api} selection={selection} account={account} participants={participants} onUpdate={update}
+        refreshParticipants={async () => setParticipants(await api.participants())} />
     </> : <>
       {publishedView && <form className="panel filters" method="get" action="/" key={view}>
         <input type="hidden" name="view" value={view} />
         <label>Поиск<input name="q" type="search" placeholder="Название или описание" defaultValue={filters.q} /></label>
-        <label><span id="filter-owner">Владелец</span><select aria-labelledby="filter-owner" name="ownerId" defaultValue={filters.ownerId}>
-          <option value="">Все владельцы</option>
-          {Array.from(owners, ([id, name]) => <option key={id} value={id}>{name}</option>)}
+        <label><span id="filter-assignee">Ответственный</span><select aria-labelledby="filter-assignee" name="assignee" defaultValue={filters.assignee}>
+          <option value="">Все ответственные</option>
+          {view === "active" && <option value="needs-assignment">Требует назначения</option>}
+          {Array.from(assignees, ([id, name]) => <option key={id} value={id}>{name}</option>)}
         </select></label>
         <label><span id="filter-category">Категория</span><select aria-labelledby="filter-category" name="category" defaultValue={filters.category}>
           <option value="">Все категории</option>
@@ -132,16 +137,16 @@ export function Register({ api, account, view, onViewChange, label, initial }: {
       {!currentList && !listError && <p role="status">Загружаем список…</p>}
       {currentList?.items.length === 0 && <div className="panel empty">
         <h2>{view === "review" ? "Очередь пуста" : "Записей пока нет"}</h2>
-        {publishedView && ["q", "ownerId", "category"].some((key) => filters[key]) && <p className="muted">Попробуйте изменить поиск или фильтры.</p>}
+        {publishedView && ["q", "assignee", "category"].some((key) => filters[key]) && <p className="muted">Попробуйте изменить поиск или фильтры.</p>}
       </div>}
       {(currentList?.view === "active" || currentList?.view === "archive") && currentList.items.length > 0 &&
         <div className="panel table-wrap">
           <table aria-label={label}>
-            <thead><tr><th>Риск</th><th>Владелец</th><th>Вероятность</th><th>Влияние</th><th>Приоритет</th>
+            <thead><tr><th>Риск</th><th>Ответственный</th><th>Вероятность</th><th>Влияние</th><th>Приоритет</th>
               <th>Дата оценки</th><th>{view === "archive" ? "Состояние" : "Пересмотр"}</th></tr></thead>
             <tbody>{currentList.items.map((item) => <tr key={item.riskId}>
               <th scope="row"><a className="text-button" href={riskLink(item.riskId)}>{item.title}</a>{item.hasOpenDraft && <small>Правка в работе</small>}</th>
-              <td><OwnerName owner={item.owner} /></td>
+              <td><AssigneeName assignee={item.assignee} /></td>
               <td>{item.likelihood}</td><td>{item.impact}</td>
               <td><PriorityBadge priority={item.priority} /></td>
               <td>{dateLabel(item.assessment.date)}</td>

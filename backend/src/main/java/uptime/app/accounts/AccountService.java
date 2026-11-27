@@ -51,17 +51,17 @@ class AccountService implements AccountDirectory {
     @Override
     public Optional<Member> findMember(String token) {
         return findSession(token).map(account -> new Member(
-                account.id(), account.isReviewer(), account.mustChangePassword()));
+                account.id(), account.isReviewer(), account.isAdmin(), account.mustChangePassword()));
     }
 
     @Override
-    public Optional<Owner> findOwner(UUID id) {
-        return store.findOwner(id, false);
+    public Optional<Participant> findParticipant(UUID id) {
+        return store.findParticipant(id, false);
     }
 
     @Override
-    public Optional<Owner> lockOwner(UUID id) {
-        return store.findOwner(id, true);
+    public Optional<Participant> lockParticipant(UUID id) {
+        return store.findParticipant(id, true);
     }
 
     @Override

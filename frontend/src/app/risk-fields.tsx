@@ -1,4 +1,4 @@
-import type { Category, Fields, Owner, Participant, Priority, ProposalStatus, PublishedRisk, RiskState } from "./api";
+import type { Assignee, Category, Fields, Priority, ProposalStatus, PublishedRisk, RiskState } from "./api";
 
 export const categories: Record<Category, string> = { LOW: "Низкий", MEDIUM: "Средний", HIGH: "Высокий" };
 export const riskStates: Record<RiskState, string> = { ACTIVE: "Активен", REMOVED: "Снят", MATERIALIZED: "Реализовался" };
@@ -10,8 +10,9 @@ export const proposalStatuses: Record<ProposalStatus, string> = {
 const calendar = new Intl.DateTimeFormat("ru-RU", { dateStyle: "medium", timeZone: "UTC" });
 export const dateLabel = (value: string) => calendar.format(new Date(value + "T00:00:00Z"));
 
-export function OwnerName({ owner }: { owner: Owner }) {
-  return <>{owner.displayName}{!owner.active && <small className="overdue">Отключён</small>}</>;
+export function AssigneeName({ assignee }: { assignee: Assignee | null }) {
+  return assignee ? <>{assignee.displayName}{!assignee.active && <small className="overdue">Требуется замена</small>}</>
+    : <>Не назначен</>;
 }
 
 export function PriorityBadge({ priority }: { priority: Priority }) {
@@ -37,7 +38,7 @@ function Tracker({ value }: { value: string }) {
 }
 
 export function FieldDetails({ fields, owner, priority }: {
-  fields: Fields | PublishedRisk["snapshot"]; owner: React.ReactNode; priority?: Priority;
+  fields: Fields | PublishedRisk["snapshot"]; owner?: Assignee | null; priority?: Priority;
 }) {
   const score = priority ?? previewPriority(fields);
   return <div className="details">
@@ -45,7 +46,7 @@ export function FieldDetails({ fields, owner, priority }: {
       {textFields.map(([key, label]) => <div key={key}><dt>{label}</dt><dd>{fields[key] || "—"}</dd></div>)}
     </dl>
     <dl className="detail-metrics">
-      <div><dt>Владелец</dt><dd>{owner}</dd></div>
+      {owner && <div><dt>Прежний владелец</dt><dd>{owner.displayName}{!owner.active && <small className="overdue">Отключён</small>}</dd></div>}
       <div><dt>Вероятность</dt><dd>{fields.likelihood ?? "—"}</dd></div>
       <div><dt>Влияние</dt><dd>{fields.impact ?? "—"}</dd></div>
       <div><dt>Приоритет</dt><dd>{score ? <PriorityBadge priority={score} /> : "—"}</dd></div>
@@ -59,23 +60,13 @@ export function FieldDetails({ fields, owner, priority }: {
   </div>;
 }
 
-export function FieldEditor({ fields, setFields, participants, currentOwner, existingOwnerId, allowClosure }: {
+export function FieldEditor({ fields, setFields, allowClosure }: {
   fields: Fields;
   setFields: (fields: Fields) => void;
-  participants: Participant[];
-  currentOwner?: Owner;
-  existingOwnerId: string | null;
   allowClosure: boolean;
 }) {
   const [likelihood, impact] = [fields.likelihood, fields.impact];
   const priority = previewPriority({ likelihood, impact });
-  const options = participants.slice();
-  if (currentOwner && !currentOwner.active && !options.some((item) => item.id === currentOwner.id)) {
-    options.push({ ...currentOwner, displayName: currentOwner.displayName + " (Отключён)" });
-  }
-  if (existingOwnerId && !options.some((item) => item.id === existingOwnerId)) {
-    options.push({ id: existingOwnerId, displayName: "Текущий владелец предложения недоступен" });
-  }
 
   function textInput(key: keyof Pick<Fields, "title" | "cause" | "possibleEvent" | "productConsequences" |
     "decisionNote" | "trackerUrl" | "closureReason">) {
@@ -93,11 +84,6 @@ export function FieldEditor({ fields, setFields, participants, currentOwner, exi
     <label>Название *<input {...textInput("title")} /></label>
     {textFields.map(([key, label]) => <label key={key}><span id={key}>{label} *</span>
       <textarea aria-labelledby={key} rows={2} {...textInput(key)} /></label>)}
-    <label><span id="draft-owner">Владелец *</span><select aria-labelledby="draft-owner" value={fields.ownerId ?? ""} onChange={(event) =>
-      setFields({ ...fields, ownerId: event.target.value || null })}>
-      <option value="">Выберите владельца</option>
-      {options.map(({ id, displayName }) => <option key={id} value={id}>{displayName}</option>)}
-    </select></label>
     <div className="form-grid">
       <div className="stack">
         <label>Вероятность *{scoreInput("likelihood", "likelihood-guide")}</label>

@@ -102,6 +102,9 @@ td small, th small, .badge + small, .account-row small { display: block; margin-
 .disclosure[open] > :not(summary) { margin-top: .85rem; }
 .timeline { display: grid; gap: .75rem; padding-left: 1.4rem; margin: 0; }
 .timeline small { display: block; }
+.occurrences { list-style: none; margin: 0; padding: 0; }
+.occurrences li { border-top: 1px solid var(--line); padding: .9rem 0; }
+.occurrences p { white-space: pre-wrap; }
 .account-row { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 1rem; padding: 1rem; }
 
 @media (max-width: 900px) {

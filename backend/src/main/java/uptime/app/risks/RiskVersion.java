@@ -4,7 +4,7 @@ import java.util.UUID;
 import uptime.app.accounts.AccountDirectory.Member;
 
 record RiskVersion(UUID riskId, UUID id, UUID authorId, long revision, Status status,
-                   DraftFields fields, boolean submitted) {
+                   DraftFields fields, UUID historicalOwnerId, boolean submitted) {
     enum Status { DRAFT, IN_REVIEW, RETURNED, APPROVED, WITHDRAWN, CLOSED }
 
     boolean ownedBy(Member member) {

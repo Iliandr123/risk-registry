@@ -168,7 +168,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Выбрать владельца риска */
+        /** Получить список активных участников */
         get: operations["listParticipants"];
         put?: never;
         post?: never;
@@ -198,7 +198,7 @@ export interface paths {
         put?: never;
         /**
          * Создать риск и его первый черновик
-         * @description Доступно любому активному участнику. Пропущенный ownerId заполняется ID автора.
+         * @description Доступно любому активному участнику.
          *     Риск получает постоянный ID, а черновик получает собственный ID и номер изменения 1.
          */
         post: operations["createRisk"];
@@ -221,7 +221,8 @@ export interface paths {
         /**
          * Прочитать опубликованную карточку
          * @description Доступно всем активным участникам после первой публикации, включая архив.
-         *     Все видят наличие незавершённой правки. Если правку создал другой участник,
+         *     В карточке видны автор первого утверждённого предложения, текущее назначение
+         *     и наличие незавершённой правки. Если правку создал другой участник,
          *     ревьюер дополнительно получает метаданные для её разблокировки.
          */
         get: operations["getRisk"];
@@ -246,7 +247,8 @@ export interface paths {
         /**
          * Прочитать доступную историю риска
          * @description После публикации общая история содержит утверждённые снимки и события
-         *     утверждения и подтверждения оценки. История предложения доступна автору,
+         *     утверждения, подтверждения оценки, изменения и переноса назначения.
+         *     История предложения доступна автору,
          *     а ревьюерам — после отправки предложения, включая возврат, отзыв и закрытие.
          *     События и содержимое приватного черновика доступны в истории только автору,
          *     включая результат разблокировки чужого черновика. Если риск ещё не опубликован
@@ -259,6 +261,111 @@ export interface paths {
         options?: never;
         head?: never;
         patch?: never;
+        trace?: never;
+    };
+    "/risks/{id}/occurrences": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Постоянный ID риска */
+                id: components["parameters"]["RiskId"];
+            };
+            cookie?: never;
+        };
+        /**
+         * Получить страницу случаев проявления риска
+         * @description Доступно любому активному участнику для опубликованного риска, включая архив.
+         *     Записи отсортированы по убыванию времени создания, затем по убыванию ID.
+         *     Для отсутствующего или неопубликованного риска возвращается 404.
+         */
+        get: operations["listRiskOccurrences"];
+        put?: never;
+        /**
+         * Добавить случай проявления риска
+         * @description Доступно любому активному участнику для активного опубликованного риска,
+         *     в том числе при открытой правке. Повторы текста и ссылок допускаются.
+         *     Запись сразу видна команде и сохраняется при публикации новой версии риска.
+         *     Автором становится текущий участник. Начальная ревизия равна 1.
+         *     Статус, приоритет, дата оценки и срок пересмотра риска сохраняются.
+         *     Отсутствующий или неопубликованный риск даёт 404, архивный — 409 RISK_CONFLICT.
+         */
+        post: operations["createRiskOccurrence"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/risks/{id}/occurrences/{occurrenceId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Постоянный ID риска */
+                id: components["parameters"]["RiskId"];
+                /** @description ID случая, принадлежащего указанному риску */
+                occurrenceId: components["schemas"]["Id"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Удалить случай проявления риска
+         * @description Доступно активному автору записи, ревьюеру или администратору для активного
+         *     опубликованного риска. Событие в историю риска не добавляется.
+         *     Отсутствующий или неопубликованный риск и отсутствующий у этого риска случай
+         *     дают 404. Для чужого случая без нужной роли возвращается 403. Архивный риск
+         *     или устаревшая ревизия дают 409 RISK_CONFLICT.
+         */
+        delete: operations["deleteRiskOccurrence"];
+        options?: never;
+        head?: never;
+        /**
+         * Исправить случай проявления риска
+         * @description Доступно активному автору записи, ревьюеру или администратору для активного
+         *     опубликованного риска. При успехе обновляется содержимое и увеличивается
+         *     ревизия. Автор и время создания сохраняются. Событие в историю риска не добавляется.
+         *     Отсутствующий или неопубликованный риск и отсутствующий у этого риска случай
+         *     дают 404. Для чужого случая без нужной роли возвращается 403. Архивный риск
+         *     или устаревшая ревизия дают 409 RISK_CONFLICT.
+         */
+        patch: operations["updateRiskOccurrence"];
+        trace?: never;
+    };
+    "/risks/{id}/assignment": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Постоянный ID риска */
+                id: components["parameters"]["RiskId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Назначить, заменить или снять ответственного
+         * @description Доступно ревьюеру или администратору для опубликованного активного риска.
+         *     Можно назначить любого активного участника, включая автора первого предложения.
+         *     Для отсутствующего или неопубликованного риска возвращается 404.
+         *     Архивный риск и устаревшая ревизия дают 409 RISK_CONFLICT. Ревизия проверяется
+         *     до сравнения с текущим назначением. Недоступный или отключённый кандидат
+         *     даёт 409 ASSIGNEE_INACTIVE.
+         *
+         *     При актуальной ревизии и совпадающем значении возвращается карточка без
+         *     изменения ревизии и истории. При изменении назначение сохраняется вместе
+         *     с новой ревизией и событием истории. Опубликованная версия, открытая правка,
+         *     дата оценки и срок пересмотра сохраняются.
+         */
+        patch: operations["updateRiskAssignment"];
         trace?: never;
     };
     "/risks/{id}/draft": {
@@ -314,13 +421,13 @@ export interface paths {
         /**
          * Выполнить действие над предложением
          * @description - submit — автор отправляет DRAFT или RETURNED с заполненными названием,
-         *       причиной, возможным событием, последствиями для продукта, владельцем и оценками.
+         *       причиной, возможным событием, последствиями для продукта и оценками.
          *     - return — ревьюер возвращает IN_REVIEW автору. Требуется непустой comment.
          *     - approve — ревьюер утверждает IN_REVIEW, включая собственное предложение.
-         *       Первая публикация и смена владельца требуют активного владельца на момент
-         *       одобрения. Прежний отключённый владелец допускается. Завершение риска требует
-         *       причины в closureReason. При успехе ни один утверждённый снимок не меняется,
-         *       а указатель публикации переключается на утверждаемую версию.
+         *       Риск впервые публикуется без ответственного. Утверждение правки, включая
+         *       завершение риска, сохраняет текущее назначение и его ревизию. Завершение
+         *       требует причины в closureReason. При успехе указатель публикации переключается
+         *       на утверждаемую версию, а прежние утверждённые снимки сохраняются.
          *     - withdraw — автор отзывает DRAFT, IN_REVIEW или RETURNED. Для первого
          *       предложения повторная подача начинается с нового риска.
          *     - unblock — ревьюер закрывает чужую незавершённую правку или первое предложение
@@ -436,19 +543,71 @@ export interface components {
             id: components["schemas"]["Id"];
             displayName: components["schemas"]["NonBlankText"];
         };
-        Owner: {
+        Assignee: {
             id: components["schemas"]["Id"];
             displayName: components["schemas"]["NonBlankText"];
-            /** @description При false интерфейс показывает пометку «Отключён». */
+            /** @description Текущая активность аккаунта. */
             active: boolean;
+        };
+        /**
+         * Format: int64
+         * @description Начинается с 1 и увеличивается только при изменении назначения.
+         */
+        AssignmentRevision: number;
+        UpdateRiskAssignmentRequest: {
+            /**
+             * Format: uuid
+             * @description ID активного участника или null для снятия назначения.
+             */
+            assigneeId: string | null;
+            expectedAssignmentRevision: components["schemas"]["AssignmentRevision"];
+        };
+        /**
+         * Format: int64
+         * @description Ревизия случая начинается с 1 и увеличивается при исправлении.
+         */
+        RiskOccurrenceRevision: number;
+        /** @description Непрозрачный указатель позиции в списке. Недопустимый курсор даёт 400. */
+        RiskOccurrenceCursor: string;
+        /**
+         * Format: uri
+         * @description Абсолютный HTTP- или HTTPS-адрес с хостом.
+         */
+        RiskOccurrenceUrl: string;
+        /** @description Должен быть задан непустой текст, ссылка или оба поля. */
+        RiskOccurrenceContent: {
+            text?: components["schemas"]["NonBlankText"] | null;
+            url?: components["schemas"]["RiskOccurrenceUrl"] | null;
+        } & ({
+            text: string;
+        } | {
+            url: string;
+        });
+        CreateRiskOccurrenceRequest: components["schemas"]["RiskOccurrenceContent"];
+        /** @description Полная замена содержимого случая. Пропущенное поле или null удаляет его значение. */
+        UpdateRiskOccurrenceRequest: {
+            expectedRevision: components["schemas"]["RiskOccurrenceRevision"];
+        } & components["schemas"]["RiskOccurrenceContent"];
+        RiskOccurrence: {
+            id: components["schemas"]["Id"];
+            author: components["schemas"]["Participant"];
+            /**
+             * Format: date-time
+             * @description Время создания в UTC.
+             */
+            createdAt: string;
+            revision: components["schemas"]["RiskOccurrenceRevision"];
+        } & WithRequired<components["schemas"]["RiskOccurrenceContent"], "text" | "url">;
+        RiskOccurrencePage: {
+            items: components["schemas"]["RiskOccurrence"][];
+            /** @description Курсор следующей страницы или null, если список закончился. */
+            nextCursor: components["schemas"]["RiskOccurrenceCursor"] | null;
         };
         DraftFields: {
             title?: string | null;
             cause?: string | null;
             possibleEvent?: string | null;
             productConsequences?: string | null;
-            /** Format: uuid */
-            ownerId?: string | null;
             likelihood?: number | null;
             impact?: number | null;
             decisionNote?: string | null;
@@ -481,7 +640,7 @@ export interface components {
             author: components["schemas"]["Participant"];
             fields: components["schemas"]["ProposalFields"];
         } & components["schemas"]["ProposalIdentity"];
-        ProposalFields: WithRequired<components["schemas"]["DraftFields"], "title" | "cause" | "possibleEvent" | "productConsequences" | "ownerId" | "likelihood" | "impact" | "decisionNote" | "trackerUrl" | "riskState" | "closureReason">;
+        ProposalFields: WithRequired<components["schemas"]["DraftFields"], "title" | "cause" | "possibleEvent" | "productConsequences" | "likelihood" | "impact" | "decisionNote" | "trackerUrl" | "riskState" | "closureReason">;
         ProposalList: {
             /** @enum {string} */
             view: "mine" | "review";
@@ -509,7 +668,7 @@ export interface components {
             riskId: components["schemas"]["Id"];
             publishedVersionId: components["schemas"]["Id"];
             title: components["schemas"]["NonBlankText"];
-            owner: components["schemas"]["Owner"];
+            assignee: components["schemas"]["Assignee"] | null;
             likelihood: components["schemas"]["ScoreInput"];
             impact: components["schemas"]["ScoreInput"];
             priority: components["schemas"]["Priority"];
@@ -529,13 +688,12 @@ export interface components {
             /** @description true при влиянии 9 или 10. */
             criticalImpact: boolean;
         };
-        PublishedSnapshot: {
+        PublishedSnapshotFields: {
             versionId: components["schemas"]["Id"];
             title: components["schemas"]["NonBlankText"];
             cause: components["schemas"]["NonBlankText"];
             possibleEvent: components["schemas"]["NonBlankText"];
             productConsequences: components["schemas"]["NonBlankText"];
-            owner: components["schemas"]["Owner"];
             likelihood: components["schemas"]["ScoreInput"];
             impact: components["schemas"]["ScoreInput"];
             priority: components["schemas"]["Priority"];
@@ -545,26 +703,42 @@ export interface components {
             riskState: components["schemas"]["RiskState"];
             closureReason?: string | null;
         };
+        PublishedSnapshot: components["schemas"]["PublishedSnapshotFields"];
+        HistoricalPublishedSnapshot: {
+            /** @description Прежний владелец опубликованной версии. В новых версиях поле равно null. */
+            owner: components["schemas"]["Assignee"] | null;
+        } & components["schemas"]["PublishedSnapshotFields"];
         PublishedRisk: {
             riskId: components["schemas"]["Id"];
             snapshot: components["schemas"]["PublishedSnapshot"];
+            /** @description Автор первого утверждённого предложения по риску. */
+            author: components["schemas"]["Participant"];
+            assignee: components["schemas"]["Assignee"] | null;
+            assignmentRevision: components["schemas"]["AssignmentRevision"];
             assessment: components["schemas"]["Assessment"];
             hasOpenDraft: boolean;
             /** @description Только для ревьюера при незавершённой правке другого участника. */
             unblock?: components["schemas"]["UnblockMetadata"];
         };
         RiskEvent: {
+            /** @description Для событий назначения это версия, опубликованная на момент события. */
             versionId: components["schemas"]["Id"];
-            actor: components["schemas"]["Participant"];
-            /** @enum {string} */
-            action: "SUBMIT" | "RETURN" | "APPROVE" | "WITHDRAW" | "UNBLOCK" | "CONFIRM_ASSESSMENT";
+            /** @description Инициатор события. При системном переносе значение равно null. */
+            actor: components["schemas"]["Participant"] | null;
+            /**
+             * @description ASSIGNMENT_MIGRATED обозначает системный перенос из прежнего реестра.
+             * @enum {string}
+             */
+            action: "SUBMIT" | "RETURN" | "APPROVE" | "WITHDRAW" | "UNBLOCK" | "CONFIRM_ASSESSMENT" | "ASSIGNMENT_CHANGED" | "ASSIGNMENT_MIGRATED";
             /** Format: date-time */
             occurredAt: string;
             comment?: string | null;
-        };
+            previousAssignee?: components["schemas"]["Participant"] | null;
+            newAssignee?: components["schemas"]["Participant"] | null;
+        } & (unknown & unknown);
         RiskHistory: {
             riskId: components["schemas"]["Id"];
-            publishedVersions: components["schemas"]["PublishedSnapshot"][];
+            publishedVersions: components["schemas"]["HistoricalPublishedSnapshot"][];
             events: components["schemas"]["RiskEvent"][];
         };
     };
@@ -659,7 +833,7 @@ export interface components {
                 "application/json": components["schemas"]["Error"];
             };
         };
-        /** @description Снимок или версия устарели либо состояние риска не позволяет действие */
+        /** @description Снимок, версия или ревизия устарели либо состояние риска не позволяет действие */
         RiskConflict: {
             headers: {
                 [name: string]: unknown;
@@ -1006,8 +1180,12 @@ export interface operations {
                 view?: "active" | "archive" | "mine" | "review";
                 /** @description Поиск по названию, причине, возможному событию и последствиям для продукта */
                 q?: string;
-                /** @description Фильтр по ID владельца */
-                ownerId?: components["schemas"]["Id"];
+                /**
+                 * @description UUID фильтрует active и archive по текущему назначению.
+                 *     Значение needs-assignment доступно только в active и включает риски без
+                 *     ответственного или с отключённым ответственным по текущим данным аккаунта.
+                 */
+                assignee?: components["schemas"]["Id"] | "needs-assignment";
                 /** @description Фильтр по категории приоритета */
                 category?: components["schemas"]["Category"];
             };
@@ -1109,6 +1287,176 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
+        };
+    };
+    listRiskOccurrences: {
+        parameters: {
+            query?: {
+                /** @description Непрозрачный nextCursor предыдущей страницы. Без него возвращается первая страница. */
+                cursor?: components["schemas"]["RiskOccurrenceCursor"];
+            };
+            header?: never;
+            path: {
+                /** @description Постоянный ID риска */
+                id: components["parameters"]["RiskId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description До 20 случаев и курсор следующей страницы */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RiskOccurrencePage"];
+                };
+            };
+            400: components["responses"]["InvalidRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    createRiskOccurrence: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Постоянный ID риска */
+                id: components["parameters"]["RiskId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateRiskOccurrenceRequest"];
+            };
+        };
+        responses: {
+            /** @description Созданный случай */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RiskOccurrence"];
+                };
+            };
+            400: components["responses"]["InvalidRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["ForbiddenOrCsrfRejected"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["RiskConflict"];
+        };
+    };
+    deleteRiskOccurrence: {
+        parameters: {
+            query: {
+                /** @description Ревизия случая, которую видел участник перед удалением. */
+                expectedRevision: components["schemas"]["RiskOccurrenceRevision"];
+            };
+            header?: never;
+            path: {
+                /** @description Постоянный ID риска */
+                id: components["parameters"]["RiskId"];
+                /** @description ID случая, принадлежащего указанному риску */
+                occurrenceId: components["schemas"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Случай удалён */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["InvalidRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["ForbiddenOrCsrfRejected"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["RiskConflict"];
+        };
+    };
+    updateRiskOccurrence: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Постоянный ID риска */
+                id: components["parameters"]["RiskId"];
+                /** @description ID случая, принадлежащего указанному риску */
+                occurrenceId: components["schemas"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateRiskOccurrenceRequest"];
+            };
+        };
+        responses: {
+            /** @description Исправленный случай */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RiskOccurrence"];
+                };
+            };
+            400: components["responses"]["InvalidRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["ForbiddenOrCsrfRejected"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["RiskConflict"];
+        };
+    };
+    updateRiskAssignment: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Постоянный ID риска */
+                id: components["parameters"]["RiskId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateRiskAssignmentRequest"];
+            };
+        };
+        responses: {
+            /** @description Опубликованная карточка с текущим назначением и его ревизией */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PublishedRisk"];
+                };
+            };
+            400: components["responses"]["InvalidRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["ForbiddenOrCsrfRejected"];
+            404: components["responses"]["NotFound"];
+            /** @description Риск архивирован, ревизия устарела или кандидат недоступен для назначения */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** @enum {string} */
+                        code: "RISK_CONFLICT" | "ASSIGNEE_INACTIVE";
+                    } & WithRequired<components["schemas"]["Error"], "code">;
+                };
+            };
         };
     };
     getRiskDraft: {
@@ -1227,15 +1575,7 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["ForbiddenOrCsrfRejected"];
             404: components["responses"]["NotFound"];
-            /** @description Версия устарела, переход недоступен или новый владелец отключён */
-            409: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Error"];
-                };
-            };
+            409: components["responses"]["RiskConflict"];
         };
     };
     confirmRiskAssessment: {

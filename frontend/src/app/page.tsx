@@ -29,10 +29,15 @@ export default async function Page({ searchParams }: { searchParams: Promise<Que
         const proposal = (list.view === "mine" || list.view === "review")
           ? list.items.find((item) => item.riskId === query.risk && item.versionId === query.version)
           : undefined;
-        if (list.view === "active" || list.view === "archive" || proposal) {
+        if (list.view === "active" || list.view === "archive" || proposal || query.version === undefined) {
           const selection = { riskId: query.risk, proposal };
-          initial.register.card = await readCard(api, selection, account.id);
-          initial.register.selection = selection;
+          const card = await readCard(api, selection, account.id);
+          if (list.view === "active" || list.view === "archive" || proposal || card.published) {
+            initial.register.card = card;
+            initial.register.selection = selection;
+          } else {
+            initial.error = "Опубликованная карточка недоступна.";
+          }
         } else {
           initial.error = "Предложение больше недоступно в этом разделе.";
         }

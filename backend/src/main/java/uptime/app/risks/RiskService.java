@@ -16,12 +16,15 @@ import org.springframework.transaction.annotation.Transactional;
 import tools.jackson.databind.JsonNode;
 import uptime.app.accounts.AccountDirectory;
 import uptime.app.accounts.AccountDirectory.Member;
-import uptime.app.accounts.AccountDirectory.Owner;
 import uptime.app.http.ApiProblem;
 import uptime.app.risks.DraftFields.RiskState;
+import uptime.app.risks.RiskOccurrence.Content;
+import uptime.app.risks.RiskOccurrence.Cursor;
 import uptime.app.risks.RiskResponses.Assessment;
+import uptime.app.risks.RiskResponses.AssignmentEvent;
 import uptime.app.risks.RiskResponses.Category;
 import uptime.app.risks.RiskResponses.Event;
+import uptime.app.risks.RiskResponses.HistoricalSnapshot;
 import uptime.app.risks.RiskResponses.History;
 import uptime.app.risks.RiskResponses.Identity;
 import uptime.app.risks.RiskResponses.Listing;
@@ -33,6 +36,7 @@ import uptime.app.risks.RiskResponses.Published;
 import uptime.app.risks.RiskResponses.Snapshot;
 import uptime.app.risks.RiskResponses.Summary;
 import uptime.app.risks.RiskResponses.Unblock;
+import uptime.app.risks.RiskResponses.WorkflowEvent;
 import uptime.app.risks.RiskStore.EventAction;
 import uptime.app.risks.RiskStore.Risk;
 import uptime.app.risks.RiskVersion.Status;
@@ -40,19 +44,24 @@ import uptime.app.risks.RiskVersion.Status;
 @Service
 @Transactional(readOnly = true, isolation = Isolation.REPEATABLE_READ)
 class RiskService {
+    private static final int OCCURRENCE_PAGE_SIZE = 20;
     private final RiskStore store;
+    private final RiskOccurrenceStore occurrenceStore;
     private final AccountDirectory accounts;
     private final RiskCalendar calendar;
 
-    RiskService(RiskStore store, AccountDirectory accounts, RiskCalendar calendar) {
+    RiskService(RiskStore store, RiskOccurrenceStore occurrenceStore, AccountDirectory accounts, RiskCalendar calendar) {
         this.store = store;
+        this.occurrenceStore = occurrenceStore;
         this.accounts = accounts;
         this.calendar = calendar;
     }
 
-    Listing<?> list(Member member, String view, String query, UUID ownerId, Category category) {
+    Listing<?> list(Member member, String view, String query, UUID assigneeId, boolean needsAssignment,
+                    Category category) {
         return switch (view) {
-            case "active", "archive" -> new Listing<>(view, summaries(view.equals("archive"), query, ownerId, category));
+            case "active", "archive" -> new Listing<>(view,
+                    summaries(view.equals("archive"), query, assigneeId, needsAssignment, category));
             case "mine" -> new Listing<>(view, proposals(member.id()));
             case "review" -> {
                 requireReviewer(member);
@@ -64,6 +73,48 @@ class RiskService {
 
     Published published(Member member, UUID id) {
         return published(member, risk(id, false));
+    }
+
+    RiskOccurrence.Page occurrences(UUID id, String encodedCursor) {
+        requirePublished(risk(id, false));
+        Cursor cursor = encodedCursor == null ? null : Cursor.decode(id, encodedCursor);
+        var items = occurrenceStore.page(id, cursor, OCCURRENCE_PAGE_SIZE + 1);
+        if (items.size() <= OCCURRENCE_PAGE_SIZE) {
+            return new RiskOccurrence.Page(items, null);
+        }
+        var page = items.subList(0, OCCURRENCE_PAGE_SIZE);
+        var last = page.getLast();
+        return new RiskOccurrence.Page(page, new Cursor(id, last.createdAt(), last.id()).encode());
+    }
+
+    @Transactional
+    RiskOccurrence createOccurrence(Member member, UUID id, Content content) {
+        Risk risk = risk(id, true);
+        requireActiveSnapshot(risk, risk.publishedVersionId());
+        return occurrenceStore.insert(id, member.id(), content);
+    }
+
+    @Transactional
+    RiskOccurrence updateOccurrence(Member member, UUID id, UUID occurrenceId, long revision, Content content) {
+        requireOccurrenceChange(member, id, occurrenceId, revision);
+        return occurrenceStore.update(id, occurrenceId, content);
+    }
+
+    @Transactional
+    void deleteOccurrence(Member member, UUID id, UUID occurrenceId, long revision) {
+        requireOccurrenceChange(member, id, occurrenceId, revision);
+        occurrenceStore.delete(id, occurrenceId);
+    }
+
+    private void requireOccurrenceChange(Member member, UUID id, UUID occurrenceId, long revision) {
+        Risk risk = risk(id, true);
+        requirePublished(risk);
+        RiskOccurrence occurrence = occurrenceStore.find(id, occurrenceId).orElseThrow(ApiProblem::notFound);
+        if (!occurrence.author().id().equals(member.id()) && !member.reviewer() && !member.admin()) {
+            throw ApiProblem.forbidden();
+        }
+        requireActiveSnapshot(risk, risk.publishedVersionId());
+        requireTransition(occurrence.revision() == revision);
     }
 
     Proposal draft(Member member, UUID id) {
@@ -80,20 +131,20 @@ class RiskService {
         }
         var events = store.events(id);
         var snapshots = events.stream().filter(event -> event.action() == EventAction.APPROVE)
-                .map(event -> snapshot(versions.get(event.versionId()))).toList();
+                .map(event -> versions.get(event.versionId()))
+                .map(version -> new HistoricalSnapshot(snapshot(version), account(version.historicalOwnerId())))
+                .toList();
         var visibleEvents = events.stream()
                 .filter(event -> event.action() == EventAction.APPROVE || event.action() == EventAction.CONFIRM_ASSESSMENT
-                        || versions.get(event.versionId()).visibleTo(member))
-                .map(event -> new Event(event.versionId(), participant(event.actorId()), event.action(),
-                        event.occurredAt(), event.comment())).toList();
+                        || event.action().isAssignment() || versions.get(event.versionId()).visibleTo(member))
+                .map(this::historyEvent).toList();
         return new History(id, snapshots, visibleEvents);
     }
 
     @Transactional
     Proposal create(Member member, JsonNode input) {
-        DraftFields fields = DraftFields.initial(member.id()).merge(input);
-        requireSelectableOwner(fields.ownerId(), member.id());
-        var risk = new Risk(UUID.randomUUID(), null, null);
+        DraftFields fields = DraftFields.initial().merge(input);
+        var risk = new Risk(UUID.randomUUID(), null, null, null, 1);
         store.insertRisk(risk.id());
         return proposal(store.insertDraft(risk.id(), member.id(), fields), risk);
     }
@@ -118,10 +169,6 @@ class RiskService {
             throw conflict();
         }
         DraftFields fields = version.fields().merge(input);
-        UUID allowedOwner = risk.published() ? version(risk, risk.publishedVersionId()).fields().ownerId() : null;
-        if (!Objects.equals(fields.ownerId(), version.fields().ownerId())) {
-            requireSelectableOwner(fields.ownerId(), allowedOwner);
-        }
         return proposal(fields.equals(version.fields()) ? version : store.save(version, fields), risk);
     }
 
@@ -173,7 +220,8 @@ class RiskService {
                 requireComment(comment);
                 yield Status.CLOSED;
             }
-            case CONFIRM_ASSESSMENT -> throw new IllegalArgumentException("Use confirm for a published assessment");
+            case CONFIRM_ASSESSMENT, ASSIGNMENT_CHANGED, ASSIGNMENT_MIGRATED ->
+                    throw new IllegalArgumentException("Expected a proposal action");
         };
         RiskVersion updated = store.transition(version, target);
         if (target == Status.APPROVED) {
@@ -192,7 +240,28 @@ class RiskService {
         LocalDate date = now.toLocalDate();
         store.publish(id, current.id(), date);
         store.append(id, current.id(), member.id(), EventAction.CONFIRM_ASSESSMENT, now, null);
-        return published(member, new Risk(id, current.id(), date));
+        return published(member, new Risk(id, current.id(), date, risk.assigneeId(), risk.assignmentRevision()));
+    }
+
+    @Transactional
+    Published assign(Member member, UUID id, UUID assigneeId, long revision) {
+        Risk risk = risk(id, true);
+        if (!risk.published()) {
+            throw ApiProblem.notFound();
+        }
+        if (!member.reviewer() && !member.admin()) {
+            throw ApiProblem.forbidden();
+        }
+        requireActiveSnapshot(risk, risk.publishedVersionId());
+        requireTransition(risk.assignmentRevision() == revision);
+        if (assigneeId != null && accounts.lockParticipant(assigneeId).filter(AccountDirectory.Participant::active).isEmpty()) {
+            throw new ApiProblem(409, "ASSIGNEE_INACTIVE", "Выберите активного участника.");
+        }
+        if (Objects.equals(risk.assigneeId(), assigneeId)) {
+            return published(member, risk);
+        }
+        store.changeAssignment(risk, assigneeId, member.id(), calendar.now());
+        return published(member, new Risk(id, risk.publishedVersionId(), risk.assessmentDate(), assigneeId, revision + 1));
     }
 
     private void approve(Risk risk, RiskVersion version, LocalDate today) {
@@ -201,39 +270,39 @@ class RiskService {
             throw new ApiProblem(400, "INVALID_REQUEST", "Укажите причину завершения риска.");
         }
         DraftFields previous = risk.published() ? version(risk, risk.publishedVersionId()).fields() : null;
-        if (previous == null || !fields.ownerId().equals(previous.ownerId())) {
-            if (accounts.lockOwner(fields.ownerId()).filter(Owner::active).isEmpty()) {
-                throw new ApiProblem(409, "OWNER_INACTIVE",
-                        "Верните предложение автору, чтобы он выбрал активного владельца.");
-            }
-        }
         boolean reassessed = previous == null || !fields.likelihood().equals(previous.likelihood())
                 || !fields.impact().equals(previous.impact());
         store.publish(risk.id(), version.id(), reassessed ? today : risk.assessmentDate());
     }
 
     private RiskVersion requireActiveSnapshot(Risk risk, UUID expected) {
-        if (!risk.published()) {
-            throw ApiProblem.notFound();
-        }
+        requirePublished(risk);
         requireTransition(risk.publishedVersionId().equals(expected));
         RiskVersion current = version(risk, expected);
         requireTransition(current.fields().riskState() == RiskState.ACTIVE);
         return current;
     }
 
-    private List<Summary> summaries(boolean archive, String query, UUID ownerId, Category category) {
+    private static void requirePublished(Risk risk) {
+        if (!risk.published()) {
+            throw ApiProblem.notFound();
+        }
+    }
+
+    private List<Summary> summaries(boolean archive, String query, UUID assigneeId, boolean needsAssignment,
+                                    Category category) {
         String search = query == null ? "" : query.strip().toLowerCase(Locale.ROOT);
         LocalDate today = calendar.today();
         Collator titles = Collator.getInstance(Locale.forLanguageTag("ru"));
         return store.published(archive).stream()
                 .filter(row -> matches(row.version().fields(), search))
-                .filter(row -> ownerId == null || ownerId.equals(row.version().fields().ownerId()))
+                .filter(row -> assigneeId == null || row.assignee() != null && assigneeId.equals(row.assignee().id()))
+                .filter(row -> !needsAssignment || row.assignee() == null || !row.assignee().active())
                 .filter(row -> category == null || category == Priority.from(row.version().fields()).category())
                 .map(row -> {
                     var version = row.version();
                     var fields = version.fields();
-                    return new Summary(version.riskId(), version.id(), fields.title(), account(fields.ownerId()),
+                    return new Summary(version.riskId(), version.id(), fields.title(), row.assignee(),
                             fields.likelihood(), fields.impact(), Priority.from(fields), fields.riskState(),
                             Assessment.from(row.assessmentDate(), fields.riskState(), today), row.hasOpenDraft());
                 })
@@ -265,29 +334,34 @@ class RiskService {
         var draft = store.draft(risk.id());
         var unblock = draft.filter(version -> member.reviewer() && !version.ownedBy(member))
                 .map(version -> new Unblock(version.id(), version.revision(), account(version.authorId()).displayName()));
-        return new Published(risk.id(), snapshot, Assessment.from(risk.assessmentDate(), snapshot.riskState(),
-                calendar.today()), draft.isPresent(), unblock.orElse(null));
+        return new Published(risk.id(), snapshot, participant(store.firstApprovedAuthor(risk.id())),
+                account(risk.assigneeId()), risk.assignmentRevision(),
+                Assessment.from(risk.assessmentDate(), snapshot.riskState(), calendar.today()),
+                draft.isPresent(), unblock.orElse(null));
     }
 
     private Snapshot snapshot(RiskVersion version) {
         DraftFields fields = version.fields();
         return new Snapshot(version.id(), fields.title(), fields.cause(), fields.possibleEvent(),
-                fields.productConsequences(), account(fields.ownerId()), fields.likelihood(), fields.impact(),
+                fields.productConsequences(), fields.likelihood(), fields.impact(),
                 Priority.from(fields), fields.decisionNote(), fields.trackerUrl(), fields.riskState(), fields.closureReason());
     }
 
-    private Owner account(UUID id) {
-        return accounts.findOwner(id).orElseThrow();
+    private AccountDirectory.Participant account(UUID id) {
+        return id == null ? null : accounts.findParticipant(id).orElseThrow();
     }
 
     private Participant participant(UUID id) {
-        return new Participant(id, account(id).displayName());
+        return id == null ? null : new Participant(id, account(id).displayName());
     }
 
-    private void requireSelectableOwner(UUID id, UUID allowed) {
-        if (id != null && !id.equals(allowed) && accounts.findOwner(id).filter(Owner::active).isEmpty()) {
-            throw new ApiProblem(400, "INVALID_REQUEST", "Выберите активного владельца.");
+    private Event historyEvent(RiskStore.Event event) {
+        Participant actor = participant(event.actorId());
+        if (event.action().isAssignment()) {
+            return new AssignmentEvent(event.versionId(), actor, event.action(), event.occurredAt(),
+                    participant(event.previousAssigneeId()), participant(event.newAssigneeId()));
         }
+        return new WorkflowEvent(event.versionId(), actor, event.action(), event.occurredAt(), event.comment());
     }
 
     private Risk risk(UUID id, boolean lock) {
