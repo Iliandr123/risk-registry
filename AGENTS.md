@@ -32,6 +32,12 @@ These root guidelines apply to both projects. Project-specific `AGENTS.md` files
 
 Use two automated suites from `frontend/` on Node.js 24: `npm run test:components` with a contract-validating backend stub and `npm run test:e2e` with the running Spring Boot application and PostgreSQL. Run the build, lint and type checks for the affected projects. Mark a task complete only after its required checks pass. If a required check fails or cannot run, report the blocker and leave its task open.
 
+## Bug fixes
+
+- Accept bug reports in the format the reporter provides. Reconstruct the steps, determine the expected behavior from the applicable spec or contract, and confirm the defect before changing code. Ask for missing details only when needed to verify the behavior.
+- For every confirmed defect, add or extend one or more automated regression tests in the existing suite at the lowest layer that can reproduce the defect. Use a component test when the defect reproduces with the contract-validating stub and E2E when it requires the real backend or PostgreSQL.
+- Verify that the regression test fails for the reported behavior before the fix and passes after it. Keep the test in the regular suite and report the verification result with the fix.
+
 ## Commit & Pull Request Guidelines
 
 No Git repository or commit history is available to establish conventions. Use concise imperative subjects, optionally scoped, such as `backend: migrate from Go to Java`. PRs should describe changes, link relevant issues, and report validation commands and blockers.

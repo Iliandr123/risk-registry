@@ -26,10 +26,10 @@ class RiskAssessmentTest {
         LocalDate date = LocalDate.of(2026, 3, 31);
         LocalDate due = LocalDate.of(2026, 6, 30);
 
-        assertEquals(due, Assessment.from(date, RiskState.ACTIVE, due.minusDays(1)).reviewDueDate());
-        assertFalse(Assessment.from(date, RiskState.ACTIVE, due.minusDays(1)).reviewRequired());
-        assertTrue(Assessment.from(date, RiskState.ACTIVE, due).reviewRequired());
-        assertFalse(Assessment.from(date, RiskState.REMOVED, due).reviewRequired());
+        assertEquals(due, Assessment.from(date, null, RiskState.ACTIVE, due.minusDays(1)).reviewDueDate());
+        assertFalse(Assessment.from(date, null, RiskState.ACTIVE, due.minusDays(1)).reviewRequired());
+        assertTrue(Assessment.from(date, null, RiskState.ACTIVE, due).reviewRequired());
+        assertFalse(Assessment.from(date, null, RiskState.REMOVED, due).reviewRequired());
     }
 
     private static DraftFields fields(int likelihood, int impact, String note) {

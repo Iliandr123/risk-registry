@@ -44,16 +44,16 @@ final class RiskResponses {
         }
     }
 
-    record Assessment(LocalDate date, LocalDate reviewDueDate, boolean reviewRequired) {
+    record Assessment(LocalDate date, LocalDate manualReviewDate, LocalDate reviewDueDate, boolean reviewRequired) {
         static LocalDate dateAfterEdit(LocalDate current, LocalDate today, DraftFields previous, DraftFields edited) {
             boolean changed = !Objects.equals(edited.likelihood(), previous.likelihood())
                     || !Objects.equals(edited.impact(), previous.impact());
             return changed ? today : current;
         }
 
-        static Assessment from(LocalDate date, RiskState state, LocalDate today) {
-            LocalDate due = date.plusMonths(3);
-            return new Assessment(date, due, state == RiskState.ACTIVE && !today.isBefore(due));
+        static Assessment from(LocalDate date, LocalDate manualReviewDate, RiskState state, LocalDate today) {
+            LocalDate due = manualReviewDate == null ? date.plusMonths(3) : manualReviewDate;
+            return new Assessment(date, manualReviewDate, due, state == RiskState.ACTIVE && !today.isBefore(due));
         }
     }
 
@@ -77,6 +77,9 @@ final class RiskResponses {
 
     record WorkflowEvent(UUID versionId, Participant actor, EventAction action, OffsetDateTime occurredAt,
                          String comment) implements Event {}
+
+    record AssessmentConfirmedEvent(@JsonUnwrapped WorkflowEvent event, LocalDate removedManualReviewDate)
+            implements Event {}
 
     record FirstPublicationEvent(@JsonUnwrapped WorkflowEvent event, String initialGroupName) implements Event {}
 

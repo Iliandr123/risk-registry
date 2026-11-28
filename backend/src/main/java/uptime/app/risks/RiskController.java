@@ -1,5 +1,7 @@
 package uptime.app.risks;
 
+import java.time.LocalDate;
+import java.time.format.DateTimeParseException;
 import java.util.Set;
 import java.util.UUID;
 import org.springframework.http.HttpStatus;
@@ -72,9 +74,16 @@ class RiskController {
     @PatchMapping("/{id}")
     Published updatePublished(@RequestAttribute(MEMBER) Member member, @PathVariable("id") String id,
                               @RequestBody JsonNode body) {
-        requireObject(body, Set.of("expectedPublishedVersionId", "fields"));
+        requireObject(body, Set.of("expectedPublishedVersionId", "fields", "manualReviewDate",
+                "expectedManualReviewDate"));
+        boolean changesDate = body.has("manualReviewDate");
+        if (changesDate != body.has("expectedManualReviewDate")) {
+            throw ApiProblem.invalidRequest();
+        }
+        var reviewDate = changesDate ? new RiskService.ManualReviewDateEdit(
+                nullableDate(body.get("expectedManualReviewDate")), nullableDate(body.get("manualReviewDate"))) : null;
         return risks.updatePublished(member, pathId(id), requestId(body, "expectedPublishedVersionId"),
-                body.get("fields"));
+                body.get("fields"), reviewDate);
     }
 
     @GetMapping("/{id}/occurrences")
@@ -189,6 +198,24 @@ class RiskController {
     private static UUID expectedSnapshot(JsonNode body) {
         requireObject(body, Set.of("expectedPublishedVersionId"));
         return requestId(body, "expectedPublishedVersionId");
+    }
+
+    private static LocalDate nullableDate(JsonNode value) {
+        if (value.isNull()) {
+            return null;
+        }
+        if (!value.isTextual() || !value.asText().matches("[0-9]{4}-[0-9]{2}-[0-9]{2}")) {
+            throw ApiProblem.invalidRequest();
+        }
+        try {
+            LocalDate date = LocalDate.parse(value.asText());
+            if (date.getYear() < 1) {
+                throw ApiProblem.invalidRequest();
+            }
+            return date;
+        } catch (DateTimeParseException exception) {
+            throw ApiProblem.invalidRequest();
+        }
     }
 
     private static void requireObject(JsonNode body, Set<String> allowed) {

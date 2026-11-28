@@ -38,19 +38,20 @@ class RiskStore {
         }
     }
 
-    record Risk(UUID id, UUID publishedVersionId, LocalDate assessmentDate, UUID assigneeId, long assignmentRevision,
-                UUID groupId, long groupRevision) {
+    record Risk(UUID id, UUID publishedVersionId, LocalDate assessmentDate, LocalDate manualReviewDate,
+                UUID assigneeId, long assignmentRevision, UUID groupId, long groupRevision) {
         boolean published() {
             return publishedVersionId != null;
         }
     }
 
-    record PublishedRow(RiskVersion version, LocalDate assessmentDate, boolean hasOpenDraft, Participant assignee,
-                        RiskGroup group) {}
+    record PublishedRow(RiskVersion version, LocalDate assessmentDate, LocalDate manualReviewDate, boolean hasOpenDraft,
+                        Participant assignee, RiskGroup group) {}
 
     record Event(UUID versionId, UUID actorId, EventAction action, OffsetDateTime occurredAt, String comment,
                  UUID previousAssigneeId, UUID newAssigneeId, boolean firstPublicationWithGroupHistory,
-                 String initialGroupName, String previousGroupName, String newGroupName, UUID previousVersionId) {}
+                 String initialGroupName, String previousGroupName, String newGroupName, UUID previousVersionId,
+                 LocalDate previousManualReviewDate, LocalDate newManualReviewDate) {}
 
     private final JdbcClient jdbc;
 
@@ -64,12 +65,14 @@ class RiskStore {
 
     Optional<Risk> risk(UUID id, boolean lock) {
         String select = """
-                SELECT id, published_version_id, assessment_date, assignee_id, assignment_revision, group_id, group_revision
+                SELECT id, published_version_id, assessment_date, manual_review_date,
+                       assignee_id, assignment_revision, group_id, group_revision
                 FROM risks WHERE id = ?
                 """;
         return jdbc.sql(lock ? select + " FOR UPDATE" : select).param(id).query((row, index) ->
                 new Risk(uuid(row, "id"), uuid(row, "published_version_id"),
                         row.getObject("assessment_date", LocalDate.class),
+                        row.getObject("manual_review_date", LocalDate.class),
                         uuid(row, "assignee_id"), row.getLong("assignment_revision"),
                         uuid(row, "group_id"), row.getLong("group_revision"))).optional();
     }
@@ -108,7 +111,7 @@ class RiskStore {
 
     List<PublishedRow> published(boolean archive, UUID groupId, boolean ungrouped) {
         return jdbc.sql("""
-                SELECT v.*, true AS submitted, r.assessment_date, r.assignee_id,
+                SELECT v.*, true AS submitted, r.assessment_date, r.manual_review_date, r.assignee_id,
                        a.display_name AS assignee_name, a.active AS assignee_active,
                        r.group_id, g.name AS group_name,
                        EXISTS (SELECT 1 FROM risk_versions d WHERE d.risk_id = r.id AND
@@ -128,6 +131,7 @@ class RiskStore {
                     UUID currentGroupId = uuid(row, "group_id");
                     RiskGroup group = currentGroupId == null ? null : new RiskGroup(currentGroupId, row.getString("group_name"));
                     return new PublishedRow(version(row, index), row.getObject("assessment_date", LocalDate.class),
+                            row.getObject("manual_review_date", LocalDate.class),
                             row.getBoolean("has_open_draft"), assignee, group);
                 }).list();
     }
@@ -158,21 +162,33 @@ class RiskStore {
                 version.proposedGroupId());
     }
 
-    void publish(UUID riskId, UUID versionId, LocalDate assessmentDate) {
-        jdbc.sql("UPDATE risks SET published_version_id = ?, assessment_date = ? WHERE id = ?")
-                .param(versionId).param(assessmentDate).param(riskId).update();
+    void publish(UUID riskId, UUID versionId, LocalDate assessmentDate, LocalDate manualReviewDate) {
+        jdbc.sql("UPDATE risks SET published_version_id = ?, assessment_date = ?, manual_review_date = ? WHERE id = ?")
+                .param(versionId).param(assessmentDate).param(manualReviewDate).param(riskId).update();
     }
 
-    UUID insertPublishedEdit(Risk risk, UUID actorId, DraftFields fields, OffsetDateTime time) {
+    UUID insertPublishedEdit(Risk risk, UUID actorId, DraftFields fields, LocalDate manualReviewDate, OffsetDateTime time) {
         UUID id = UUID.randomUUID();
         bindFields(jdbc.sql("INSERT INTO risk_versions (id, risk_id, author_id, status, "
                         + FIELD_COLUMNS + ") VALUES (:id, :risk, :author, 'APPROVED', " + FIELD_VALUES + ")"), fields)
                 .param("id", id).param("risk", risk.id()).param("author", actorId).update();
         jdbc.sql("""
-                INSERT INTO risk_events (risk_id, version_id, actor_id, action, occurred_at, previous_version_id)
-                VALUES (?, ?, ?, 'FIELDS_UPDATED', ?, ?)
-                """).param(risk.id()).param(id).param(actorId).param(time).param(risk.publishedVersionId()).update();
+                INSERT INTO risk_events (risk_id, version_id, actor_id, action, occurred_at, previous_version_id,
+                                         previous_manual_review_date, new_manual_review_date)
+                VALUES (?, ?, ?, 'FIELDS_UPDATED', ?, ?, ?, ?)
+                """).param(risk.id()).param(id).param(actorId).param(time).param(risk.publishedVersionId())
+                .param(risk.manualReviewDate()).param(manualReviewDate).update();
         return id;
+    }
+
+    void confirmAssessment(Risk risk, UUID actorId, OffsetDateTime time) {
+        jdbc.sql("UPDATE risks SET assessment_date = ?, manual_review_date = NULL WHERE id = ?")
+                .param(time.toLocalDate()).param(risk.id()).update();
+        jdbc.sql("""
+                INSERT INTO risk_events (risk_id, version_id, actor_id, action, occurred_at, previous_manual_review_date)
+                VALUES (?, ?, ?, 'CONFIRM_ASSESSMENT', ?, ?)
+                """).param(risk.id()).param(risk.publishedVersionId()).param(actorId).param(time)
+                .param(risk.manualReviewDate()).update();
     }
 
     void publishFirst(RiskVersion version, UUID actorId, OffsetDateTime time, String comment, String initialGroupName) {
@@ -223,7 +239,8 @@ class RiskStore {
                         row.getString("comment"), uuid(row, "previous_assignee_id"), uuid(row, "new_assignee_id"),
                         row.getBoolean("first_publication_with_group_history"), row.getString("initial_group_name"),
                         row.getString("previous_group_name"), row.getString("new_group_name"),
-                        uuid(row, "previous_version_id"))).list();
+                        uuid(row, "previous_version_id"), row.getObject("previous_manual_review_date", LocalDate.class),
+                        row.getObject("new_manual_review_date", LocalDate.class))).list();
     }
 
     private static JdbcClient.StatementSpec bindFields(JdbcClient.StatementSpec query, DraftFields fields) {

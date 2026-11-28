@@ -1,10 +1,12 @@
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import {
   ApiError, errorMessage, type Account, type Api, type CompletionFields, type DraftAction, type Participant,
   type Proposal, type PublishedRisk, type RiskGroup, type RiskHistory,
 } from "./api";
 import { AssigneeName, CompletionEditor, dateLabel, FieldDetails, FieldEditor, proposalStatuses, riskStates } from "./risk-fields";
-import { canEditPublished, PublishedEditor, publishedFieldLabels, publishedValue } from "./published-editor";
+import {
+  canEditPublished, manualReviewDateLabel, PublishedEditor, publishedFieldLabels, publishedValue, reviewDateValue,
+} from "./published-editor";
 import { RiskOccurrences } from "./risk-occurrences";
 import { GroupSelect, noGroup } from "./risk-groups";
 
@@ -42,6 +44,7 @@ export function RiskCard({ api, selection, account, participants, groups, refres
   const [candidate, setCandidate] = useState<string | null>(null);
   const [editingGroup, setEditingGroup] = useState(false);
   const [groupId, setGroupId] = useState<string | null>(null);
+  const confirmDialog = useRef<HTMLDialogElement>(null);
   const { riskId, proposal } = selection;
 
   useEffect(() => {
@@ -123,11 +126,22 @@ export function RiskCard({ api, selection, account, participants, groups, refres
     });
   }
 
+  function confirmAssessment(versionId: string) {
+    return run(async () => {
+      const confirmed = await api.confirm(riskId, versionId);
+      setCard((current) => current?.published ? { ...current, published: confirmed } : current);
+      onUpdate(selection, "Оценка подтверждена.", false);
+      const history = await api.history(riskId);
+      setCard((current) => current && { ...current, history });
+    });
+  }
+
   const reload = () => onUpdate(selection, "");
   if (loadingError) return <div role="alert" className="error">{loadingError} <button onClick={reload}>Повторить</button></div>;
   if (!card) return <p role="status">Загружаем карточку…</p>;
   const { published, draft, history, occurrences } = card;
   const snapshot = published?.snapshot;
+  const manualReviewDate = published?.assessment.manualReviewDate;
   const unblock = published?.unblock;
   const candidates = participants.filter(({ id }) => id !== published?.assignee?.id || published.assignee.active);
   const selectedCandidate = candidate === "" || candidates.some(({ id }) => id === candidate) ? candidate : null;
@@ -188,7 +202,10 @@ export function RiskCard({ api, selection, account, participants, groups, refres
       <FieldDetails fields={snapshot} priority={snapshot.priority} />
       <div className="assessment">
         <span>Дата оценки <strong>{dateLabel(published.assessment.date)}</strong></span>
-        {snapshot.riskState === "ACTIVE" && <span>Следующий пересмотр <strong>{dateLabel(published.assessment.reviewDueDate)}</strong></span>}
+        {snapshot.riskState === "ACTIVE" && <span>
+          Следующий пересмотр <strong>{dateLabel(published.assessment.reviewDueDate)}</strong>
+          {manualReviewDate && " · Назначен вручную"}
+        </span>}
         {published.assessment.reviewRequired && <strong className="overdue">Требует пересмотра</strong>}
       </div>
       {published.hasOpenDraft && <p className="notice">Предложение о завершении в работе{unblock && ` · ${unblock.authorDisplayName}`}</p>}
@@ -204,14 +221,28 @@ export function RiskCard({ api, selection, account, participants, groups, refres
           <button disabled={busy || conflict} onClick={() => setCompletion({ riskState: "REMOVED", closureReason: null })}>
             Завершить риск
           </button>}
-        {!editingPublished && snapshot.riskState === "ACTIVE" && account.isReviewer && <button disabled={busy || conflict}
-          onClick={() => run(async () => {
-            const confirmed = await api.confirm(riskId, snapshot.versionId);
-            setCard({ ...card, published: confirmed });
-            onUpdate(selection, "Оценка подтверждена.", false);
-            setCard({ ...card, published: confirmed, history: await api.history(riskId) });
-          })}>Подтвердить оценку</button>}
+        {!editingPublished && snapshot.riskState === "ACTIVE" && account.isReviewer &&
+          <button disabled={busy || conflict} onClick={() => {
+            if (manualReviewDate) confirmDialog.current?.showModal();
+            else void confirmAssessment(snapshot.versionId);
+          }}>Подтвердить оценку</button>}
       </div>
+      {!editingPublished && snapshot.riskState === "ACTIVE" && account.isReviewer && manualReviewDate &&
+        <dialog ref={confirmDialog} className="confirmation" aria-labelledby="confirm-assessment-title"
+          aria-describedby="confirm-assessment-message">
+          <div className="stack">
+            <h3 id="confirm-assessment-title">Снять ручную дату пересмотра?</h3>
+            <p id="confirm-assessment-message">При подтверждении оценки дата {dateLabel(manualReviewDate)} будет снята.
+              Новый срок наступит через три месяца от даты подтверждения.</p>
+            <div className="actions">
+              <button onClick={() => confirmDialog.current?.close()}>Отмена</button>
+              <button className="primary" onClick={() => {
+                confirmDialog.current?.close();
+                void confirmAssessment(snapshot.versionId);
+              }}>Подтвердить оценку и снять дату</button>
+            </div>
+          </div>
+        </dialog>}
       {completion && !editingPublished && snapshot.riskState === "ACTIVE" && !published.hasOpenDraft &&
         <form onSubmit={(event) => {
           event.preventDefault();
@@ -373,10 +404,16 @@ function History({ history }: { history: RiskHistory }) {
         {event.action === "GROUP_CHANGED" &&
           <p>{event.previousGroupName ?? noGroup} → {event.newGroupName ?? noGroup}</p>}
         {event.action === "FIELDS_UPDATED" && <dl className="details">
-          {event.changes?.map(({ field, previousValue, newValue }) => <div key={field}>
-            <dt>{publishedFieldLabels[field]}</dt><dd>{publishedValue(previousValue)} → {publishedValue(newValue)}</dd>
-          </div>)}
+          {event.changes?.map(({ field, previousValue, newValue }) => {
+            const formatValue = field === "manualReviewDate" ? reviewDateValue : publishedValue;
+            return <div key={field}>
+              <dt>{field === "manualReviewDate" ? manualReviewDateLabel : publishedFieldLabels[field]}</dt>
+              <dd>{formatValue(previousValue)} → {formatValue(newValue)}</dd>
+            </div>;
+          })}
         </dl>}
+        {event.action === "CONFIRM_ASSESSMENT" && event.removedManualReviewDate &&
+          <p>Снята ручная дата пересмотра · {dateLabel(event.removedManualReviewDate)}</p>}
         {event.comment && <p>{event.comment}</p>}
         {closed && <details className="disclosure">
           <summary>Закрытая правка · {closed.fields.title || "Без названия"}</summary>

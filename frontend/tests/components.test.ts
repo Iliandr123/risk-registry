@@ -34,7 +34,7 @@ const published: PublishedRisk = {
     riskState: "ACTIVE", cause: "Ручные операции", possibleEvent: "Очередь растёт",
     productConsequences: "Клиенты ждут ответа",
   },
-  assessment: { date: "2026-03-31", reviewDueDate: "2026-06-30", reviewRequired: true },
+  assessment: { date: "2026-03-31", manualReviewDate: null, reviewDueDate: "2026-06-30", reviewRequired: true },
 };
 const summary = {
   riskId, publishedVersionId: versionId, title, assignee: null, group: null, likelihood: 4, impact: 10,
@@ -220,6 +220,183 @@ test("компоненты пилота через сервер Next.js и ко�
       await page.getByRole("link", { name: "← К списку" }).click();
       await page.getByRole("link", { name: updated.snapshot.title, exact: true }).waitFor();
       assert.equal(new URL(page.url()).searchParams.get("q"), query.q);
+      backend.assertComplete();
+    } finally {
+      await browser.close();
+    }
+  });
+
+  function reviewDateList(card: PublishedRisk): RiskList {
+    return { view: "active", items: [{ ...summary, assignee: card.assignee, assessment: card.assessment,
+      publishedVersionId: card.snapshot.versionId }] };
+  }
+
+  function reviewDateRefresh(card: PublishedRisk, journal: RiskHistory): Exchange[] {
+    return [
+      { operation: "getRiskHistory", path, cookie, status: 200, reply: journal },
+      { operation: "listParticipants", cookie, status: 200, reply: [participant] },
+      { operation: "listRisks", query: { view: "active" }, cookie, status: 200, reply: reviewDateList(card) },
+    ];
+  }
+
+  await t.test("ручная дата сохраняется вместе с мерами, сверяется при конфликте и сбрасывается", async () => {
+    const browser = await chromium.launch({ channel: process.env.PILOT_BROWSER ?? "chrome" });
+    try {
+      const page = await signedInPage(browser);
+      const assigned = { ...published, assignee };
+      const manualDate = "2026-10-15";
+      const manualLabel = "15 окт. 2026 г.";
+      const note = "Проверить время обработки после автоматизации";
+      const scheduled = { ...assigned, snapshot: { ...assigned.snapshot, decisionNote: note,
+        versionId: "aaaaaaaa-1111-4111-8111-111111111111" },
+        assessment: { ...assigned.assessment, manualReviewDate: manualDate, reviewDueDate: manualDate, reviewRequired: false } };
+      const scheduledEvent: RiskHistory["events"][number] = {
+        action: "FIELDS_UPDATED", actor: participant, occurredAt, versionId: scheduled.snapshot.versionId,
+        changes: [
+          { field: "decisionNote", previousValue: null, newValue: note },
+          { field: "manualReviewDate", previousValue: null, newValue: manualDate },
+        ],
+      };
+      const scheduledHistory = { ...history, events: [scheduledEvent] };
+      const patch = (body: unknown, status: number, reply: unknown): Exchange[] => [
+        { operation: "getCsrfToken", cookie, status: 200, reply: { token: "manual-review-date-csrf" } },
+        { operation: "updatePublishedRisk", path, cookie, csrf: "manual-review-date-csrf", body, status, reply },
+      ];
+      const edit = page.getByRole("button", { name: "Редактировать", exact: true });
+      const form = page.getByRole("form", { name: "Редактирование опубликованного риска" });
+      const date = form.getByLabel("Ручная дата пересмотра");
+      const save = form.getByRole("button", { name: "Сохранить изменения" });
+      const assessment = page.locator(".assessment");
+      backend.expect([...pageExchanges(account, reviewDateList(assigned)), ...cardExchanges(assigned, null, history)]);
+      await page.goto(`${base}/?view=active&risk=${riskId}`);
+      await edit.click();
+      assert.equal(await date.inputValue(), "");
+      await form.getByLabel("Решение и меры").fill(note);
+      await date.fill(manualDate);
+      const screenshots = process.env.PILOT_REVIEW_DATE_SCREENSHOTS;
+      if (screenshots) {
+        await mkdir(screenshots, { recursive: true });
+        await form.screenshot({ path: join(screenshots, "manual-review-date-editor.png") });
+      }
+      backend.expect([
+        ...patch({ expectedPublishedVersionId: versionId, fields: { decisionNote: note },
+          manualReviewDate: manualDate, expectedManualReviewDate: null }, 200, scheduled),
+        ...reviewDateRefresh(scheduled, scheduledHistory),
+      ]);
+      await save.click();
+      await assessment.getByText(/Назначен вручную/).waitFor();
+      await assessment.getByText(manualLabel, { exact: true }).waitFor();
+      assert.equal(await assessment.getByText("Требует пересмотра").count(), 0);
+      await page.getByText(`Автоматический срок → ${manualLabel}`, { exact: true }).waitFor();
+      await page.waitForLoadState("networkidle");
+      backend.assertComplete();
+      backend.expect(pageExchanges(account, reviewDateList(scheduled)));
+      await page.getByRole("link", { name: "← К списку" }).click();
+      await page.getByRole("cell", { name: manualLabel, exact: true }).waitFor();
+      backend.assertComplete();
+
+      backend.expect([...pageExchanges(account, reviewDateList(scheduled)),
+        ...cardExchanges(scheduled, null, scheduledHistory)]);
+      await page.getByRole("link", { name: title }).click();
+      await edit.click();
+      assert.equal(await date.inputValue(), manualDate);
+      await date.fill("2026-11-10");
+      const currentDate = "2026-12-20";
+      const currentLabel = "20 дек. 2026 г.";
+      const current = { ...scheduled, snapshot: { ...scheduled.snapshot, versionId: "bbbbbbbb-1111-4111-8111-111111111111" },
+        assessment: { ...scheduled.assessment, manualReviewDate: currentDate, reviewDueDate: currentDate } };
+      backend.expect([
+        ...patch({ expectedPublishedVersionId: scheduled.snapshot.versionId, fields: {},
+          manualReviewDate: "2026-11-10", expectedManualReviewDate: manualDate },
+        409, { code: "RISK_CONFLICT", message: "Срок пересмотра изменился." }),
+        { operation: "getRisk", path, cookie, status: 200, reply: current },
+      ]);
+      await save.click();
+      const comparison = form.getByRole("region", { name: "Сверка полей" });
+      await comparison.getByText("Ваш ввод · 10 нояб. 2026 г.", { exact: true }).waitFor();
+      await comparison.getByText(`Текущее значение · ${currentLabel}`, { exact: true }).waitFor();
+      assert.equal(await date.inputValue(), "2026-11-10");
+      assert.equal(await save.isDisabled(), true);
+      await comparison.getByRole("button", { name: "Взять текущее значение" }).click();
+      assert.equal(await date.inputValue(), currentDate);
+      await comparison.getByRole("button", { name: "Подтвердить сверку" }).click();
+      await form.getByRole("button", { name: "Сбросить ручную дату" }).click();
+      assert.equal(await date.inputValue(), "");
+
+      const reset = { ...current, snapshot: { ...current.snapshot, versionId: "cccccccc-1111-4111-8111-111111111111" },
+        assessment: published.assessment };
+      const resetHistory: RiskHistory = { ...scheduledHistory, events: [scheduledEvent, {
+        ...scheduledEvent, versionId: reset.snapshot.versionId,
+        changes: [{ field: "manualReviewDate", previousValue: currentDate, newValue: null }],
+      }] };
+      backend.expect([
+        ...patch({ expectedPublishedVersionId: current.snapshot.versionId, fields: {},
+          manualReviewDate: null, expectedManualReviewDate: currentDate }, 200, reset),
+        ...reviewDateRefresh(reset, resetHistory),
+      ]);
+      await save.click();
+      await assessment.getByText("30 июн. 2026 г.", { exact: true }).waitFor();
+      await assessment.getByText("Требует пересмотра", { exact: true }).waitFor();
+      assert.equal(await assessment.getByText(/Назначен вручную/).count(), 0);
+      await page.getByText(`${currentLabel} → Автоматический срок`, { exact: true }).waitFor();
+      await page.waitForLoadState("networkidle");
+      backend.assertComplete();
+    } finally {
+      await browser.close();
+    }
+  });
+
+  await t.test("ревьюер может отменить или подтвердить снятие ручной даты", async () => {
+    const browser = await chromium.launch({ channel: process.env.PILOT_BROWSER ?? "chrome" });
+    try {
+      const page = await signedInPage(browser);
+      const reviewer = { ...account, isReviewer: true };
+      const manualDate = "2026-10-15";
+      const manualLabel = "15 окт. 2026 г.";
+      const scheduled = { ...published,
+        assessment: { ...published.assessment, manualReviewDate: manualDate, reviewDueDate: manualDate } };
+      backend.expect([...pageExchanges(reviewer, reviewDateList(scheduled)), ...cardExchanges(scheduled, null, history)]);
+      await page.goto(`${base}/?view=active&risk=${riskId}`);
+      const confirm = page.getByRole("button", { name: "Подтвердить оценку", exact: true });
+      const dialog = page.getByRole("dialog", { name: "Снять ручную дату пересмотра?" });
+      const assessment = page.locator(".assessment");
+      await confirm.click();
+      await dialog.getByText(`При подтверждении оценки дата ${manualLabel} будет снята.`, { exact: false }).waitFor();
+      const screenshots = process.env.PILOT_REVIEW_DATE_SCREENSHOTS;
+      if (screenshots) {
+        await mkdir(screenshots, { recursive: true });
+        await page.screenshot({ path: join(screenshots, "manual-review-date-confirmation.png") });
+      }
+      await dialog.getByRole("button", { name: "Отмена", exact: true }).click();
+      await dialog.waitFor({ state: "hidden" });
+      await assessment.getByText(manualLabel, { exact: true }).waitFor();
+      await assessment.getByText("Требует пересмотра", { exact: true }).waitFor();
+      await page.waitForLoadState("networkidle");
+      backend.assertComplete();
+
+      const confirmed = { ...scheduled, assessment: {
+        date: "2026-10-15", manualReviewDate: null, reviewDueDate: "2027-01-15", reviewRequired: false,
+      } };
+      const confirmedHistory: RiskHistory = { ...history, events: [{
+        action: "CONFIRM_ASSESSMENT", actor: participant, occurredAt, versionId, removedManualReviewDate: manualDate,
+      }] };
+      backend.expect([
+        { operation: "getCsrfToken", cookie, status: 200, reply: { token: "confirm-assessment-csrf" } },
+        { operation: "confirmRiskAssessment", path, cookie, csrf: "confirm-assessment-csrf",
+          body: { expectedPublishedVersionId: versionId }, status: 200, reply: confirmed },
+        ...reviewDateRefresh(confirmed, confirmedHistory),
+      ]);
+      await confirm.click();
+      await dialog.getByRole("button", { name: "Подтвердить оценку и снять дату" }).click();
+      await assessment.getByText("15 янв. 2027 г.", { exact: true }).waitFor();
+      assert.equal(await assessment.getByText("Требует пересмотра").count(), 0);
+      await page.getByText(`Снята ручная дата пересмотра · ${manualLabel}`, { exact: true }).waitFor();
+      await page.waitForLoadState("networkidle");
+      backend.assertComplete();
+      backend.expect(pageExchanges(reviewer, reviewDateList(confirmed)));
+      await page.getByRole("link", { name: "← К списку" }).click();
+      await page.getByRole("cell", { name: "15 янв. 2027 г.", exact: true }).waitFor();
+      assert.equal(await page.getByText("Требует пересмотра", { exact: true }).count(), 0);
       backend.assertComplete();
     } finally {
       await browser.close();

@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { test } from "node:test";
+import { fileURLToPath } from "node:url";
 import { chromium, type Browser, type Page, type Locator } from "playwright-core";
 
 const base = process.env.PILOT_UI_URL ?? "http://localhost:3000";
@@ -8,6 +10,9 @@ const button = (page: Page | Locator, name: string) => page.getByRole("button", 
 const link = (page: Page | Locator, name: string) => page.getByRole("link", { name, exact: true });
 const heading = (page: Page, name: string) => page.getByRole("heading", { name, exact: true });
 const text = (page: Page | Locator, value: string) => page.getByText(value, { exact: true });
+const dateLabel = (date: string) => new Intl.DateTimeFormat("ru-RU", {
+  dateStyle: "medium", timeZone: "UTC",
+}).format(new Date(date));
 
 async function signIn(page: Page, login: string, password: string) {
   await page.goto(base);
@@ -167,6 +172,67 @@ test("рабочий пилот: первый вход, роли, отзыв с�
     await button(author, "Сохранить изменения").click();
     await text(author, "Изменения опубликованы.").waitFor();
     await text(author, `${note} → ${mitigation}`).waitFor();
+    const manualDate = new Date(Date.now() + 150 * 86_400_000).toISOString().slice(0, 10);
+    const manualLabel = dateLabel(manualDate);
+    const assessment = author.locator(".assessment");
+    const historyChange = text(author, `Автоматический срок → ${manualLabel}`);
+    await button(author, "Редактировать").click();
+    await author.getByLabel("Ручная дата пересмотра", { exact: true }).fill(manualDate);
+    await button(author, "Сохранить изменения").click();
+    await text(assessment, manualLabel).waitFor();
+    await historyChange.waitFor();
+
+    await button(author, "Редактировать").click();
+    await author.getByLabel("Вероятность *", { exact: true }).fill("3");
+    await button(author, "Сохранить изменения").click();
+    await text(author, "2 → 3").waitFor();
+    await text(assessment, manualLabel).waitFor();
+
+    const composeProject = process.env.PILOT_E2E_RESTART_PROJECT;
+    if (composeProject) {
+      const cwd = fileURLToPath(new URL("../..", import.meta.url));
+      const compose = ["compose", "-p", composeProject, "-f", "compose.yaml"];
+      execFileSync("docker", [...compose, "stop"], { cwd, timeout: 30_000 });
+      execFileSync("docker", [...compose, "up", "--wait", "--wait-timeout", "45"], { cwd, timeout: 55_000 });
+      await author.reload();
+      await text(assessment, manualLabel).waitFor();
+      await historyChange.waitFor();
+      await text(author, `${note} → ${mitigation}`).waitFor();
+      await text(author, "2 → 3").waitFor();
+    }
+
+    await link(reviewer.getByRole("navigation"), "Активные риски").click();
+    const reviewerRow = reviewer.getByRole("row").filter({ has: link(reviewer, title) });
+    await reviewerRow.getByRole("cell", { name: manualLabel, exact: true }).waitFor();
+    await link(reviewerRow, title).click();
+    const reviewerAssessment = reviewer.locator(".assessment");
+    await text(reviewerAssessment, manualLabel).waitFor();
+    await button(reviewer, "Подтвердить оценку").click();
+    const dateDialog = reviewer.getByRole("dialog", { name: "Снять ручную дату пересмотра?" });
+    await dateDialog.getByText(`При подтверждении оценки дата ${manualLabel} будет снята.`, { exact: false }).waitFor();
+    const confirmation = reviewer.waitForResponse((response) =>
+      response.url().includes(`/api/risks/${riskId}/`) && response.request().method() === "POST");
+    await button(dateDialog, "Подтвердить оценку и снять дату").click();
+    const confirmed = await confirmation;
+    assert.equal(confirmed.status(), 200);
+    const { assessment: automatic } = await confirmed.json();
+    const comparisonDate = new Date(automatic.date);
+    const day = comparisonDate.getUTCDate();
+    comparisonDate.setUTCMonth(comparisonDate.getUTCMonth() + 3, 1);
+    const endOfMonth = new Date(Date.UTC(comparisonDate.getUTCFullYear(), comparisonDate.getUTCMonth() + 1, 0));
+    comparisonDate.setUTCDate(Math.min(day, endOfMonth.getUTCDate()));
+    assert.equal(automatic.manualReviewDate, null);
+    assert.equal(automatic.reviewRequired, false);
+    assert.equal(automatic.reviewDueDate, comparisonDate.toISOString().slice(0, 10));
+    assert.ok(automatic.reviewDueDate < manualDate);
+    await text(reviewer, "Оценка подтверждена.").waitFor();
+    await text(reviewerAssessment, dateLabel(automatic.reviewDueDate)).waitFor();
+    await text(reviewer, `Снята ручная дата пересмотра · ${manualLabel}`).waitFor();
+    await link(reviewer, "← К списку").click();
+    await reviewerRow.getByRole("cell", { name: dateLabel(automatic.reviewDueDate), exact: true }).waitFor();
+    await author.reload();
+    await text(assessment, dateLabel(automatic.reviewDueDate)).waitFor();
+
     const occurrences = (page: Page) => page.getByRole("region", { name: "Случаи проявления риска" });
     const occurrence = "Сортировка заявок заняла два дня.";
     await button(occurrences(author), "Добавить случай").click();

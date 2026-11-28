@@ -47,6 +47,15 @@ p { line-height: 1.48; }
 .check { display: inline-flex; align-items: center; gap: .35rem; padding: .35rem 0; }
 .notice, .error { border-radius: 8px; padding: .75rem 1rem; margin-block: .6rem; overflow-wrap: anywhere; }
 .notice { background: #e7f3ef; color: #194f45; }
+.confirmation {
+  max-width: min(30rem, calc(100% - 2rem));
+  padding: 1.25rem;
+  border: 1px solid #bacbd0;
+  border-radius: 12px;
+  background: var(--surface);
+  color: var(--ink);
+}
+.confirmation::backdrop { background: rgb(18 39 45 / .45); }
 .error { background: #fceae7; color: #8c2f23; }
 .notice code { padding: .5rem; background: #fff; justify-self: start; user-select: all; }
 .brand { display: flex; align-items: center; gap: .7rem; font-size: 1.08rem; font-weight: 700; white-space: nowrap; }

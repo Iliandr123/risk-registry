@@ -23,9 +23,11 @@ import uptime.app.risks.DraftFields.RiskState;
 import uptime.app.risks.RiskOccurrence.Content;
 import uptime.app.risks.RiskOccurrence.Cursor;
 import uptime.app.risks.RiskResponses.Assessment;
+import uptime.app.risks.RiskResponses.AssessmentConfirmedEvent;
 import uptime.app.risks.RiskResponses.AssignmentEvent;
 import uptime.app.risks.RiskResponses.Category;
 import uptime.app.risks.RiskResponses.Event;
+import uptime.app.risks.RiskResponses.FieldChange;
 import uptime.app.risks.RiskResponses.FieldsUpdatedEvent;
 import uptime.app.risks.RiskResponses.FirstProposalFields;
 import uptime.app.risks.RiskResponses.FirstPublicationEvent;
@@ -57,6 +59,8 @@ class RiskService {
     private final AccountDirectory accounts;
     private final RiskCalendar calendar;
 
+    record ManualReviewDateEdit(LocalDate expected, LocalDate value) {}
+
     RiskService(RiskStore store, RiskOccurrenceStore occurrenceStore, RiskGroupStore groups, AccountDirectory accounts,
                 RiskCalendar calendar) {
         this.store = store;
@@ -85,20 +89,31 @@ class RiskService {
     }
 
     @Transactional
-    Published updatePublished(Member member, UUID id, UUID expectedSnapshot, JsonNode input) {
+    Published updatePublished(Member member, UUID id, UUID expectedSnapshot, JsonNode input,
+                              ManualReviewDateEdit reviewDate) {
         Risk risk = risk(id, true);
         requirePublished(risk);
         if (!member.reviewer() && !member.admin() && !member.id().equals(risk.assigneeId())) {
             throw ApiProblem.forbidden();
         }
         DraftFields previous = requireActiveSnapshot(risk, expectedSnapshot).fields();
+        LocalDate previousDate = risk.manualReviewDate();
+        if (reviewDate != null) {
+            requireTransition(Objects.equals(previousDate, reviewDate.expected()));
+        }
+        LocalDate manualDate = reviewDate == null ? previousDate : reviewDate.value();
+        boolean dateChanged = !Objects.equals(previousDate, manualDate);
+        var now = calendar.now();
+        LocalDate today = now.toLocalDate();
+        if (dateChanged && manualDate != null && manualDate.isBefore(today)) {
+            throw ApiProblem.invalidRequest();
+        }
         DraftFields fields = previous.mergePublished(input);
-        if (fields.equals(previous)) {
+        if (fields.equals(previous) && !dateChanged) {
             return published(member, risk);
         }
-        var now = calendar.now();
-        UUID updatedId = store.insertPublishedEdit(risk, member.id(), fields, now);
-        publishEdit(risk, updatedId, previous, fields, now.toLocalDate());
+        UUID updatedId = store.insertPublishedEdit(risk, member.id(), fields, manualDate, now);
+        store.publish(id, updatedId, Assessment.dateAfterEdit(risk.assessmentDate(), today, previous, fields), manualDate);
         return published(member, risk(id, false));
     }
 
@@ -180,7 +195,7 @@ class RiskService {
     Proposal create(Member member, JsonNode input) {
         DraftFields fields = DraftFields.initial().merge(input);
         UUID groupId = proposalGroup(input, null);
-        var risk = new Risk(UUID.randomUUID(), null, null, null, 1, null, 1);
+        var risk = new Risk(UUID.randomUUID(), null, null, null, null, 1, null, 1);
         store.insertRisk(risk.id());
         return proposal(store.insertDraft(risk.id(), member.id(), fields, groupId), risk);
     }
@@ -296,7 +311,7 @@ class RiskService {
                 store.publishFirst(version, member.id(), now, comment, groupName);
                 return new Identity(updated);
             }
-            store.publish(id, updated.id(), risk.assessmentDate());
+            store.publish(id, updated.id(), risk.assessmentDate(), risk.manualReviewDate());
         }
         store.append(id, versionId, member.id(), action, now, comment);
         return new Identity(updated);
@@ -306,11 +321,8 @@ class RiskService {
     Published confirm(Member member, UUID id, UUID expectedSnapshot) {
         requireReviewer(member);
         Risk risk = risk(id, true);
-        RiskVersion current = requireActiveSnapshot(risk, expectedSnapshot);
-        var now = calendar.now();
-        LocalDate date = now.toLocalDate();
-        store.publish(id, current.id(), date);
-        store.append(id, current.id(), member.id(), EventAction.CONFIRM_ASSESSMENT, now, null);
+        requireActiveSnapshot(risk, expectedSnapshot);
+        store.confirmAssessment(risk, member.id(), calendar.now());
         return published(member, risk(id, false));
     }
 
@@ -357,10 +369,6 @@ class RiskService {
         return published(member, risk(id, false));
     }
 
-    private void publishEdit(Risk risk, UUID versionId, DraftFields previous, DraftFields fields, LocalDate today) {
-        store.publish(risk.id(), versionId, Assessment.dateAfterEdit(risk.assessmentDate(), today, previous, fields));
-    }
-
     private RiskVersion requireActiveSnapshot(Risk risk, UUID expected) {
         requirePublished(risk);
         requireTransition(risk.publishedVersionId().equals(expected));
@@ -390,7 +398,8 @@ class RiskService {
                     var fields = version.fields();
                     return new Summary(version.riskId(), version.id(), fields.title(), row.assignee(), row.group(),
                             fields.likelihood(), fields.impact(), Priority.from(fields), fields.riskState(),
-                            Assessment.from(row.assessmentDate(), fields.riskState(), today), row.hasOpenDraft());
+                            Assessment.from(row.assessmentDate(), row.manualReviewDate(), fields.riskState(), today),
+                            row.hasOpenDraft());
                 })
                 .sorted(Comparator.<Summary>comparingInt(item -> item.priority().score()).reversed()
                         .thenComparing(Summary::title, titles).thenComparing(Summary::riskId))
@@ -424,7 +433,7 @@ class RiskService {
         return new Published(risk.id(), snapshot, participant(store.firstApprovedAuthor(risk.id())),
                 account(risk.assigneeId()), risk.assignmentRevision(),
                 risk.groupId() == null ? null : groups.find(risk.groupId()).orElseThrow(), risk.groupRevision(),
-                Assessment.from(risk.assessmentDate(), snapshot.riskState(), calendar.today()),
+                Assessment.from(risk.assessmentDate(), risk.manualReviewDate(), snapshot.riskState(), calendar.today()),
                 draft.isPresent(), unblock.orElse(null));
     }
 
@@ -448,8 +457,13 @@ class RiskService {
         if (event.action() == EventAction.FIELDS_UPDATED) {
             DraftFields previous = versions.get(event.previousVersionId()).fields();
             DraftFields current = versions.get(event.versionId()).fields();
+            var changes = current.changesFrom(previous);
+            if (!Objects.equals(event.previousManualReviewDate(), event.newManualReviewDate())) {
+                changes = Stream.concat(changes.stream(), Stream.of(new FieldChange(
+                        "manualReviewDate", event.previousManualReviewDate(), event.newManualReviewDate()))).toList();
+            }
             return new FieldsUpdatedEvent(event.versionId(), actor, event.action(),
-                    event.occurredAt().withOffsetSameInstant(ZoneOffset.UTC), current.changesFrom(previous));
+                    event.occurredAt().withOffsetSameInstant(ZoneOffset.UTC), changes);
         }
         if (event.action().isAssignment()) {
             return new AssignmentEvent(event.versionId(), actor, event.action(), event.occurredAt(),
@@ -460,6 +474,9 @@ class RiskService {
                     event.previousGroupName(), event.newGroupName());
         }
         var workflow = new WorkflowEvent(event.versionId(), actor, event.action(), event.occurredAt(), event.comment());
+        if (event.action() == EventAction.CONFIRM_ASSESSMENT && event.previousManualReviewDate() != null) {
+            return new AssessmentConfirmedEvent(workflow, event.previousManualReviewDate());
+        }
         return event.firstPublicationWithGroupHistory() ? new FirstPublicationEvent(workflow, event.initialGroupName()) : workflow;
     }
 

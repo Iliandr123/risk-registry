@@ -1,6 +1,6 @@
 import { useState, type FormEvent } from "react";
 import { ApiError, errorMessage, type Account, type Api, type Fields, type PublishedRisk, type PublishedRiskUpdate } from "./api";
-import { FieldEditor } from "./risk-fields";
+import { dateLabel, FieldEditor } from "./risk-fields";
 
 type Field = keyof PublishedRiskUpdate["fields"];
 
@@ -21,6 +21,12 @@ export function publishedValue(value: string | number | null | undefined) {
   return value == null || value === "" ? "Не указано" : value;
 }
 
+export const manualReviewDateLabel = "Ручная дата пересмотра";
+
+export function reviewDateValue(value: string | number | null) {
+  return typeof value === "string" ? dateLabel(value) : "Автоматический срок";
+}
+
 export function canEditPublished(account: Account, risk: PublishedRisk) {
   return account.active && risk.snapshot.riskState === "ACTIVE"
     && (account.isReviewer || account.isAdmin || risk.assignee?.id === account.id);
@@ -31,6 +37,8 @@ export function PublishedEditor({ api, risk, account, onSaved, onCancel }: {
   onCancel: (refresh: boolean) => void;
 }) {
   const [base, setBase] = useState(risk.snapshot);
+  const [baseReviewDate, setBaseReviewDate] = useState(risk.assessment.manualReviewDate);
+  const [manualReviewDate, setManualReviewDate] = useState(baseReviewDate);
   const [fields, setFields] = useState<Fields>(() => ({
     ...risk.snapshot,
     decisionNote: risk.snapshot.decisionNote ?? null,
@@ -47,6 +55,7 @@ export function PublishedEditor({ api, risk, account, onSaved, onCancel }: {
     try {
       const current = await api.risk(risk.riskId);
       setLatest(current);
+      setManualReviewDate((entered) => entered === baseReviewDate ? current.assessment.manualReviewDate : entered);
       setFields((entered) => ({
         ...entered,
         ...Object.fromEntries(fieldNames.filter((key) => entered[key] === (base[key] ?? null))
@@ -74,6 +83,7 @@ export function PublishedEditor({ api, risk, account, onSaved, onCancel }: {
       const updated = await api.updatePublished(risk.riskId, {
         expectedPublishedVersionId: base.versionId,
         fields: Object.fromEntries(changed.map((key) => [key, fields[key]])),
+        ...(manualReviewDate !== baseReviewDate && { manualReviewDate, expectedManualReviewDate: baseReviewDate }),
       });
       await onSaved(updated, updated.snapshot.versionId !== base.versionId);
     } catch (error) {
@@ -94,6 +104,14 @@ export function PublishedEditor({ api, risk, account, onSaved, onCancel }: {
   return <form className="stack" onSubmit={save} aria-label="Редактирование опубликованного риска">
     <fieldset className="stack" disabled={busy || unavailable}>
       <FieldEditor fields={fields} setFields={setFields} published />
+      <div className="stack">
+        <label>{manualReviewDateLabel}
+          <input type="date" value={manualReviewDate ?? ""} aria-describedby="manual-review-date-help"
+            onChange={(event) => setManualReviewDate(event.target.value || null)} />
+        </label>
+        <small id="manual-review-date-help" className="muted">Пустое поле возвращает срок через три месяца от даты оценки.</small>
+        {manualReviewDate && <button type="button" onClick={() => setManualReviewDate(null)}>Сбросить ручную дату</button>}
+      </div>
     </fieldset>
     {error && <p className="error" role="alert">{error}</p>}
     {reconciling && latest && <section className="notice stack" aria-label="Сверка полей">
@@ -108,9 +126,20 @@ export function PublishedEditor({ api, risk, account, onSaved, onCancel }: {
             onClick={() => setFields({ ...fields, [key]: latest.snapshot[key] ?? null })}>
             Взять текущее значение
           </button></dd>}
-        </div>)}</dl>
+        </div>)}
+        {manualReviewDate !== latest.assessment.manualReviewDate && <div>
+          <dt>{manualReviewDateLabel}</dt>
+          <dd>Ваш ввод · {reviewDateValue(manualReviewDate)}</dd>
+          <dd>Текущее значение · {reviewDateValue(latest.assessment.manualReviewDate)}</dd>
+          {!unavailable && <dd><button type="button" disabled={busy}
+            onClick={() => setManualReviewDate(latest.assessment.manualReviewDate)}>
+            Взять текущее значение
+          </button></dd>}
+        </div>}
+      </dl>
       {!unavailable && <button type="button" disabled={busy} onClick={() => {
         setBase(latest.snapshot);
+        setBaseReviewDate(latest.assessment.manualReviewDate);
         setReconciling(false);
         setError("");
       }}>Подтвердить сверку</button>}

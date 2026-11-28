@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { test } from "node:test";
-import type { components } from "../src/app/api.generated";
+import { fileURLToPath } from "node:url";
+import type { components, operations } from "../src/app/api.generated";
 import { verifyResponse } from "./contract-backend.ts";
 
 type Schemas = components["schemas"];
@@ -57,12 +59,18 @@ async function signIn(login: string, password: string, newPassword?: string) {
   };
 }
 
-test("API опубликованного риска: назначение, история, права и конкуренция с архивированием", { timeout: 60_000 }, async () => {
+let adminSession: ReturnType<typeof signIn> | undefined;
+
+function testAdmin() {
   const login = process.env.PILOT_ADMIN_LOGIN;
-  const password = process.env.PILOT_ADMIN_PASSWORD;
-  assert.ok(login && password, "Настройте PILOT_ADMIN_LOGIN и PILOT_ADMIN_PASSWORD для тестового стенда.");
   // The browser scenario changes the bootstrap password when running the full E2E suite.
-  const admin = await signIn(login, process.env.PILOT_NEW_ADMIN_PASSWORD ?? password);
+  const password = process.env.PILOT_NEW_ADMIN_PASSWORD ?? process.env.PILOT_ADMIN_PASSWORD;
+  assert.ok(login && password, "Настройте PILOT_ADMIN_LOGIN и PILOT_ADMIN_PASSWORD для тестового стенда.");
+  return adminSession ??= signIn(login, password);
+}
+
+test("API опубликованного риска: назначение, история, права и конкуренция с архивированием", { timeout: 60_000 }, async () => {
+  const admin = await testAdmin();
   const profile = await read<{ isAdmin: boolean; isReviewer: boolean }>(await admin.send("/me"), 200);
   assert.equal(profile.isAdmin, true);
   assert.equal(profile.isReviewer, false);
@@ -239,10 +247,7 @@ test("API опубликованного риска: назначение, ис�
 });
 
 test("API опубликованных полей: права, история, дата оценки и конфликт", { timeout: 60_000 }, async () => {
-  const login = process.env.PILOT_ADMIN_LOGIN;
-  const password = process.env.PILOT_NEW_ADMIN_PASSWORD ?? process.env.PILOT_ADMIN_PASSWORD;
-  assert.ok(login && password, "Настройте аккаунт администратора тестового стенда.");
-  const admin = await signIn(login, password);
+  const admin = await testAdmin();
   const suffix = randomUUID().slice(0, 8);
   async function member(role: string, isReviewer = false) {
     const login = `fields-${role}-${suffix}`;
@@ -370,4 +375,164 @@ test("API опубликованных полей: права, история, �
   await error(await patch(admin, archived.snapshot.versionId, { cause: "Архив" }), 409, "RISK_CONFLICT");
   assert.deepEqual(await card(), archived);
   assert.deepEqual(await history(), archivedHistory);
+});
+
+test("API ручной даты пересмотра: сроки, история и конфликт с подтверждением", { timeout: 60_000 }, async (t) => {
+  const admin = await testAdmin();
+  const suffix = randomUUID().slice(0, 8);
+  async function member(role: string, isReviewer = false) {
+    const login = `manual-review-${role}-${suffix}`;
+    const created = await read<{ temporaryPassword: string }>(
+      await admin.send("/admin/accounts", "POST", { login, displayName: login, isReviewer }), 201);
+    return signIn(login, created.temporaryPassword, `Manual review date E2E ${suffix}!`);
+  }
+
+  const owner = await member("owner");
+  const reviewer = await member("reviewer", true);
+  const teammate = await member("teammate");
+  const draft = await read<Proposal>(await owner.send("/risks", "POST", {
+    title: `Пересмотр ${suffix}`, cause: "Ручные операции", possibleEvent: "Очередь растёт",
+    productConsequences: "Клиент ждёт", likelihood: 3, impact: 5,
+  }), 201);
+  const path = `/risks/${draft.riskId}`;
+  const revision = ({ versionId, revision }: Proposal) => ({ versionId, expectedRevision: revision });
+  const patch = (actor: typeof owner, expectedPublishedVersionId: string, fields: unknown, dates = {}) =>
+    actor.send(path, "PATCH", { expectedPublishedVersionId, fields, ...dates });
+  const confirm = (actor: typeof owner, expectedPublishedVersionId: string) =>
+    actor.send(`${path}/assessment/confirm`, "POST", { expectedPublishedVersionId });
+  const dates = (manualReviewDate: string | null, expectedManualReviewDate: string | null) =>
+    ({ manualReviewDate, expectedManualReviewDate });
+
+  async function published(response: Response, operation: keyof operations) {
+    const body = await read<Published>(response, 200);
+    verifyResponse(operation, 200, body);
+    return body;
+  }
+  async function error(response: Response, status: number, code: string,
+    operation: keyof operations = "updatePublishedRisk") {
+    const body = await read<{ code: string }>(response, status);
+    verifyResponse(operation, status, body);
+    assert.equal(body.code, code);
+  }
+  async function history() {
+    const body = await read<History>(await teammate.send(`${path}/history`), 200);
+    verifyResponse("getRiskHistory", 200, body);
+    return body;
+  }
+  async function assertAssessment(expected: Published["assessment"], view = "active") {
+    assert.deepEqual((await published(await teammate.send(path), "getRisk")).assessment, expected);
+    const list = await read<Listing>(await teammate.send(`/risks?view=${view}&q=${suffix}`), 200);
+    verifyResponse("listRisks", 200, list);
+    assert.deepEqual(list.items.find((item) => item.riskId === draft.riskId)?.assessment, expected);
+  }
+
+  await error(await patch(reviewer, draft.versionId, {}, dates(null, null)), 404, "NOT_FOUND");
+  await error(await confirm(reviewer, draft.versionId), 404, "NOT_FOUND", "confirmRiskAssessment");
+  const submitted = await read<Proposal>(await owner.send(`${path}/draft/submit`, "POST", revision(draft)), 200);
+  assert.equal((await reviewer.send(`${path}/draft/approve`, "POST", revision(submitted))).status, 200);
+  const initial = await published(await reviewer.send(path), "getRisk");
+  assert.equal(initial.assessment.manualReviewDate, null);
+  const today = initial.assessment.date;
+  const nextYear = new Date(`${today}T00:00:00Z`);
+  nextYear.setUTCDate(nextYear.getUTCDate() + 370);
+  const future = nextYear.toISOString().slice(0, 10);
+  assert.ok(future > initial.assessment.reviewDueDate);
+  const version = initial.snapshot.versionId;
+
+  await error(await patch(owner, version, {}, dates(today, null)), 403, "FORBIDDEN");
+  await error(await patch(teammate, version, {}, dates(today, null)), 403, "FORBIDDEN");
+  assert.equal((await admin.send(`${path}/assignment`, "PATCH", {
+    assigneeId: owner.member.id, expectedAssignmentRevision: initial.assignmentRevision,
+  })).status, 200);
+  const initialHistory = await history();
+  for (const invalid of [dates("2025-02-29", null), dates(`${today}T00:00:00Z`, null),
+    dates("2000-01-01", null), { manualReviewDate: null }, { expectedManualReviewDate: null }]) {
+    await error(await patch(owner, version, { decisionNote: "Не должно сохраниться" }, invalid), 400, "INVALID_REQUEST");
+  }
+  assert.deepEqual(await history(), initialHistory);
+
+  const dueToday = await published(await patch(owner, version, { decisionNote: "Проверить меры" }, dates(today, null)),
+    "updatePublishedRisk");
+  assert.equal(dueToday.snapshot.decisionNote, "Проверить меры");
+  assert.notEqual(dueToday.snapshot.versionId, version);
+  await assertAssessment({ date: today, manualReviewDate: today, reviewDueDate: today, reviewRequired: true });
+  const todayHistory = await history();
+  assert.equal(todayHistory.events.length, initialHistory.events.length + 1);
+  assert.deepEqual(todayHistory.events.at(-1)?.changes, [
+    { field: "decisionNote", previousValue: null, newValue: "Проверить меры" },
+    { field: "manualReviewDate", previousValue: null, newValue: today },
+  ]);
+  const later = await published(await patch(admin, dueToday.snapshot.versionId, {}, dates(future, today)),
+    "updatePublishedRisk");
+  assert.notEqual(later.snapshot.versionId, dueToday.snapshot.versionId);
+  await assertAssessment({ date: today, manualReviewDate: future, reviewDueDate: future, reviewRequired: false });
+  const laterHistory = await history();
+  assert.equal(laterHistory.events.length, todayHistory.events.length + 1);
+  assert.deepEqual(laterHistory.events.at(-1)?.changes, [
+    { field: "manualReviewDate", previousValue: today, newValue: future },
+  ]);
+  assert.deepEqual(await published(await patch(owner, later.snapshot.versionId, {}, dates(future, future)),
+    "updatePublishedRisk"), later);
+  await error(await confirm(reviewer, dueToday.snapshot.versionId), 409, "RISK_CONFLICT", "confirmRiskAssessment");
+  await error(await confirm(admin, later.snapshot.versionId), 403, "FORBIDDEN", "confirmRiskAssessment");
+  await error(await confirm(owner, later.snapshot.versionId), 403, "FORBIDDEN", "confirmRiskAssessment");
+  assert.deepEqual(await history(), laterHistory);
+
+  const agedAssessment = "2000-01-31";
+  const agedManual = "2000-03-01";
+  const project = process.env.PILOT_E2E_COMPOSE_PROJECT;
+  let current = later;
+  await t.test("просроченная ручная дата и сброс к просроченному автоматическому сроку", {
+    skip: project ? false : "Для сдвига дат задайте PILOT_E2E_COMPOSE_PROJECT тестового стенда.",
+  }, async () => {
+    assert.ok(project);
+    assert.match(draft.riskId, /^[0-9a-f-]{36}$/);
+    const result = execFileSync("docker", ["compose", "-p", project, "-f", "compose.yaml", "exec", "-T", "db",
+      "psql", "-U", "risk_register", "-d", "risk_register", "-v", "ON_ERROR_STOP=1", "-Atq", "-c",
+      `UPDATE risks SET assessment_date = '${agedAssessment}', manual_review_date = '${agedManual}'
+       WHERE id = '${draft.riskId}' RETURNING id`],
+    { cwd: fileURLToPath(new URL("../..", import.meta.url)), encoding: "utf8" });
+    assert.equal(result.trim(), draft.riskId);
+    const noteOnly = await published(await patch(owner, current.snapshot.versionId, { decisionNote: "Новые меры" }),
+      "updatePublishedRisk");
+    const sameDate = await published(await patch(owner, noteOnly.snapshot.versionId,
+      { decisionNote: "Уточнённые меры" }, dates(agedManual, agedManual)), "updatePublishedRisk");
+    await assertAssessment({ date: agedAssessment, manualReviewDate: agedManual, reviewDueDate: agedManual, reviewRequired: true });
+    current = await published(await patch(owner, sameDate.snapshot.versionId, {}, dates(null, agedManual)),
+      "updatePublishedRisk");
+    await assertAssessment({ date: agedAssessment, manualReviewDate: null, reviewDueDate: "2000-04-30", reviewRequired: true });
+    assert.deepEqual((await history()).events.at(-1)?.changes, [
+      { field: "manualReviewDate", previousValue: agedManual, newValue: null },
+    ]);
+    current = await published(await patch(reviewer, current.snapshot.versionId, {}, dates(future, null)),
+      "updatePublishedRisk");
+  });
+
+  const scored = await published(await patch(owner, current.snapshot.versionId, { impact: 9 }), "updatePublishedRisk");
+  assert.equal(scored.snapshot.priority.score, 27);
+  await assertAssessment({ date: today, manualReviewDate: future, reviewDueDate: future, reviewRequired: false });
+  const beforeConfirm = await history();
+  const confirmed = await published(await confirm(reviewer, scored.snapshot.versionId), "confirmRiskAssessment");
+  assert.equal(confirmed.snapshot.versionId, scored.snapshot.versionId);
+  await assertAssessment(initial.assessment);
+  const confirmedHistory = await history();
+  assert.equal(confirmedHistory.events.length, beforeConfirm.events.length + 1);
+  assert.equal(confirmedHistory.events.at(-1)?.action, "CONFIRM_ASSESSMENT");
+  assert.equal(confirmedHistory.events.at(-1)?.removedManualReviewDate, future);
+  await error(await patch(owner, scored.snapshot.versionId, { decisionNote: "Устаревшая правка" }, dates(today, future)),
+    409, "RISK_CONFLICT");
+  assert.deepEqual(await history(), confirmedHistory);
+  assert.deepEqual(await published(await reviewer.send(path), "getRisk"), confirmed);
+
+  const closing = await read<Proposal>(await owner.send(`${path}/draft`, "POST", {
+    expectedPublishedVersionId: confirmed.snapshot.versionId, riskState: "REMOVED", closureReason: "Риск устранён",
+  }), 201);
+  const queued = await read<Proposal>(await owner.send(`${path}/draft/submit`, "POST", revision(closing)), 200);
+  assert.equal((await reviewer.send(`${path}/draft/approve`, "POST", revision(queued))).status, 200);
+  const archived = await published(await reviewer.send(path), "getRisk");
+  const archivedHistory = await history();
+  await error(await patch(reviewer, archived.snapshot.versionId, {}, dates(future, null)), 409, "RISK_CONFLICT");
+  await error(await confirm(reviewer, archived.snapshot.versionId), 409, "RISK_CONFLICT", "confirmRiskAssessment");
+  assert.deepEqual(await history(), archivedHistory);
+  assert.equal(archivedHistory.events.find((event) => event.action === "CONFIRM_ASSESSMENT")?.removedManualReviewDate, future);
 });

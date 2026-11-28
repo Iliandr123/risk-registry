@@ -302,19 +302,27 @@ export interface paths {
          * @description Доступно текущему ответственному, ревьюеру или администратору из числа
          *     активных участников. Право проверяется по текущему назначению. Для
          *     отсутствующего или неопубликованного риска возвращается 404. Для
-         *     архивного риска или устаревшей опубликованной версии возвращается 409.
+         *     архивного риска, устаревшей опубликованной версии или несовпадения
+         *     expectedManualReviewDate с текущей ручной датой возвращается 409 RISK_CONFLICT.
          *
          *     Пропущенные поля сохраняют текущие значения. Null очищает заметку или
-         *     ссылку. Сервер проверяет всю карточку после применения полей.
-         *     При актуальной версии и совпадении значений возвращается текущая карточка
+         *     ссылку. Если manualReviewDate пропущено, ручная дата сохраняется. Null
+         *     возвращает автоматический срок. При передаче manualReviewDate нужно передать
+         *     expectedManualReviewDate из исходной карточки, включая null. Новая ручная
+         *     дата должна быть корректной календарной датой в формате YYYY-MM-DD и быть
+         *     не раньше текущего дня команды. Уже сохранённую просроченную дату можно
+         *     оставить. Недопустимый запрос даёт 400 без сохранения изменений.
+         *     Сервер проверяет всю карточку после применения полей.
+         *     При актуальных исходных данных и совпадении значений возвращается текущая карточка
          *     без новой версии и события. Изменение сразу публикуется и создаёт одно
-         *     событие FIELDS_UPDATED. Состояние риска, назначение, группа, случаи
+         *     событие FIELDS_UPDATED, в том числе при изменении только ручной даты.
+         *     Состояние риска, назначение, группа, случаи
          *     проявления и открытое предложение о завершении сохраняются.
          *
          *     Изменение вероятности или влияния пересчитывает приоритет и устанавливает
-         *     дату оценки на текущую календарную дату команды. Срок пересмотра наступает
-         *     через три календарных месяца или в последний день месяца, если нужного
-         *     числа нет. При остальных правках сохраняются актуальные дата оценки и срок.
+         *     дату оценки на текущую календарную дату команды. При остальных правках
+         *     дата оценки сохраняется. Действующий срок пересмотра определяется по
+         *     ручной дате, если она задана, или по автоматическому правилу от даты оценки.
          */
         patch: operations["updatePublishedRisk"];
         trace?: never;
@@ -335,6 +343,7 @@ export interface paths {
          *     утверждения, прямого редактирования, подтверждения оценки, изменения
          *     и переноса назначения, смены группы. Прямое редактирование видно всем
          *     активным участникам и содержит прежние и новые значения изменённых полей.
+         *     Подтверждение оценки содержит снятую ручную дату, если она была задана.
          *     Названия групп отражают состояние справочника на момент события.
          *     История предложения доступна автору,
          *     а ревьюерам — после отправки предложения, включая возврат, отзыв и закрытие.
@@ -593,9 +602,12 @@ export interface paths {
         put?: never;
         /**
          * Подтвердить оценку текущего опубликованного снимка
-         * @description Только ревьюер. Для активного риска обновляет дату оценки и добавляет событие
-         *     в историю. Открытое предложение о завершении сохраняет свои поля, статус и номер изменения.
-         *     Устаревший снимок отклоняется без изменения даты.
+         * @description Только ревьюер. Для активного риска обновляет дату оценки на текущий день
+         *     команды, снимает ручную дату даже до наступления срока и возвращает
+         *     автоматический срок пересмотра. Снятая дата записывается в событие
+         *     CONFIRM_ASSESSMENT. Открытое предложение о завершении сохраняет свои поля,
+         *     статус и номер изменения. Для отсутствующего или неопубликованного риска
+         *     возвращается 404, для архивного риска или устаревшего снимка — 409 RISK_CONFLICT.
          */
         post: operations["confirmRiskAssessment"];
         delete?: never;
@@ -768,7 +780,12 @@ export interface components {
         };
         UpdatePublishedRiskRequest: {
             expectedPublishedVersionId: components["schemas"]["Id"];
+            /** @description Передайте пустой объект при изменении только ручной даты. */
             fields: components["schemas"]["PublishedRiskPatchFields"];
+            /** @description Пропуск сохраняет срок, null возвращает автоматический срок, строка задаёт ручную дату. */
+            manualReviewDate?: components["schemas"]["ManualReviewDate"];
+            /** @description Ручная дата из исходной карточки или null, если действовал автоматический срок. */
+            expectedManualReviewDate?: components["schemas"]["ManualReviewDate"];
         };
         /** @enum {string} */
         RiskCompletionState: "REMOVED" | "MATERIALIZED";
@@ -836,15 +853,20 @@ export interface components {
             revision: components["schemas"]["Revision"];
             authorDisplayName: components["schemas"]["NonBlankText"];
         };
+        /** Format: date */
+        ManualReviewDate: string | null;
         /**
          * @description Первая публикация, изменение оценок и явное подтверждение обновляют дату оценки.
-         *     Срок пересмотра равен дате оценки плюс три календарных месяца в часовом
-         *     поясе команды с переносом на последний день короткого месяца.
-         *     reviewRequired становится true для активного риска в день наступления срока.
+         *     Действующий срок пересмотра равен ручной дате, если она задана. Иначе он
+         *     равен дате оценки плюс три календарных месяца с переносом на последний
+         *     день короткого месяца. reviewRequired равно true для активного риска
+         *     начиная со дня действующего срока по календарю команды.
          */
         Assessment: {
             /** Format: date */
             date: string;
+            /** @description Текущая ручная дата или null при автоматическом сроке. */
+            manualReviewDate: components["schemas"]["ManualReviewDate"];
             /** Format: date */
             reviewDueDate: string;
             reviewRequired: boolean;
@@ -911,10 +933,10 @@ export interface components {
         };
         PublishedRiskFieldChange: {
             /** @enum {string} */
-            field: "title" | "cause" | "possibleEvent" | "productConsequences" | "likelihood" | "impact" | "decisionNote" | "trackerUrl";
+            field: "title" | "cause" | "possibleEvent" | "productConsequences" | "likelihood" | "impact" | "decisionNote" | "trackerUrl" | "manualReviewDate";
             previousValue: string | number | null;
             newValue: string | number | null;
-        } & (unknown & unknown & unknown & unknown);
+        } & (unknown & unknown & unknown & unknown & unknown);
         RiskEvent: {
             /**
              * @description Для событий назначения и смены группы это версия, опубликованная
@@ -934,6 +956,8 @@ export interface components {
             comment?: string | null;
             /** @description Прежние и новые значения только изменившихся полей, по одному элементу на поле. */
             changes?: components["schemas"]["PublishedRiskFieldChange"][];
+            /** @description Ручная дата, снятая при подтверждении оценки. Без снятой даты поле отсутствует. */
+            removedManualReviewDate?: string & components["schemas"]["ManualReviewDate"];
             previousAssignee?: components["schemas"]["Participant"] | null;
             newAssignee?: components["schemas"]["Participant"] | null;
             /**
@@ -945,7 +969,7 @@ export interface components {
             previousGroupName?: string | null;
             /** @description Новое название группы на момент смены или null. */
             newGroupName?: string | null;
-        } & (unknown & unknown & unknown & unknown & unknown & unknown & unknown);
+        } & (unknown & unknown & unknown & unknown & unknown & unknown & unknown & unknown);
         RiskHistory: {
             riskId: components["schemas"]["Id"];
             publishedVersions: components["schemas"]["HistoricalPublishedSnapshot"][];
